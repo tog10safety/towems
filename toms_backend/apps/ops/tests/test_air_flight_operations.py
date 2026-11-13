@@ -480,7 +480,9 @@ def test_takeoff_far_from_the_plan_is_reported_as_a_timing_warning(
     warnings = takeoff.json()["timing_warnings"]
     assert len(warnings) == 1
     assert warnings[0]["code"] == "actual_departure_outside_plan"
+    assert warnings[0]["leg"] == 1
     assert warnings[0]["difference_minutes"] == 180
+    assert "leg 1:" in warnings[0]["message"]
     assert "before the planned ETD" in warnings[0]["message"]
 
 

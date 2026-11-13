@@ -97,13 +97,13 @@ def mission_warnings(mission) -> list[dict]:
                             "code": code,
                             "severity": "warning",
                             "aircraft": label,
-                            "leg": sequence + 1,
+                            "leg": sequence,
                             "field": actual_field,
                             "actual": actual,
                             "planned": planned,
                             "difference_minutes": _minutes(difference),
                             "message": (
-                                f"{label} leg {sequence + 1}: {actual_label} is "
+                                f"{label} leg {sequence}: {actual_label} is "
                                 f"{_duration_label(difference)} {direction} the "
                                 f"planned {planned_label}."
                             ),
@@ -119,13 +119,13 @@ def mission_warnings(mission) -> list[dict]:
                                 "code": "arrival_before_departure",
                                 "severity": "error",
                                 "aircraft": label,
-                                "leg": sequence + 1,
+                                "leg": sequence,
                                 "field": "ata",
                                 "actual": leg.ata,
                                 "planned": leg.atd,
                                 "difference_minutes": _minutes(leg.atd - leg.ata),
                                 "message": (
-                                    f"{label} leg {sequence + 1}: actual landing "
+                                    f"{label} leg {sequence}: actual landing "
                                     "is before actual takeoff."
                                 ),
                             }
