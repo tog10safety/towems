@@ -4,6 +4,7 @@
 .env
 .env.*
 !.env.example
+deploy/systemd/backup.env
 # Legacy Flask settings contain a local credential fallback and are not source
 # for the Django application. Keep them out of version control.
 config.py

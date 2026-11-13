@@ -1,7 +1,7 @@
 # Deployment, Backup and Rollback — TOWEMS on DigitalOcean
 
-> **Nothing in this document has been executed.** No deployment, no production migration and
-> no production data change was performed during this engagement. Deployment topology,
+> **Production deployment and migration steps have not been executed.** No deployment, no
+> production migration and no production data change was performed during this engagement. Deployment topology,
 > credentials and the existing host layout are **UNVERIFIED from this machine** — verify each
 > step before running it. Production cutover requires your explicit approval (Stage 10 of
 > `MIGRATION_PLAN.md`).
@@ -38,6 +38,123 @@ the migrated system. Also back up `approved_pdfs/`, `signatures/` and `static/un
 (they hold generated evidence and the images embedded in it) — they are **not** in the
 database. The legacy `instance/` SQLite `.bak` files are archived under
 `Flask MRM OLD/instance/` and are not needed by TOWEMS.
+
+### 2.1 Automated encrypted backups
+
+`tools/postgres_backup.py` wraps the same procedure with encryption, checksums, retention and
+a restore drill. It reads `DATABASE_URL` from the environment (or from
+`toms_backend/.env` when `python-dotenv` is installed), and it never prints the database
+password.
+
+```bash
+export DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/mrm_system
+
+# Preferred: encrypt to a GPG public key. Keep the private key off the backup host.
+export TOMS_BACKUP_GPG_RECIPIENT=backup@example.com
+
+# Alternative: symmetric GPG with a passphrase file outside the repository.
+# export TOMS_BACKUP_GPG_PASSPHRASE_FILE=/etc/towems/backup.passphrase
+
+# Optional off-host destination. Choose one or both.
+export TOMS_BACKUP_OFFSITE_DIR=/mnt/offsite/towems
+# export TOMS_BACKUP_UPLOAD_COMMAND='rclone copy {file} remote:towems-backups'
+
+python tools/postgres_backup.py backup
+python tools/postgres_backup.py list
+python tools/postgres_backup.py restore-test
+```
+
+What `backup` does:
+
+* opens a repeatable-read transaction and exports a PostgreSQL snapshot;
+* writes `pg_dump --format=custom` from that snapshot;
+* records row counts for `users`, `units`, `mrm_forms`, `hazard_registry`,
+  `mission_hazards` and `django_migrations` from the same snapshot;
+* verifies the archive with `pg_restore --list`;
+* encrypts it with GPG (AES-256 for symmetric encryption) and removes the plaintext dump;
+* writes `<backup>.dump.gpg.sha256` and `<backup>.dump.json`;
+* copies the encrypted file, checksum and manifest to `TOMS_BACKUP_OFFSITE_DIR` and verifies
+  the destination checksum, and/or runs `TOMS_BACKUP_UPLOAD_COMMAND` without a shell.
+
+The upload command placeholders are `{file}`, `{checksum}` and `{manifest}`. It is split with
+`shlex` and executed directly, not through a shell. Database credentials are removed from the
+uploader's environment.
+
+Retention defaults to the newest backup for each of the last 30 UTC days plus the newest for
+each of the last 12 months. Override it with `TOMS_BACKUP_RETENTION_DAILY` and
+`TOMS_BACKUP_RETENTION_MONTHLY`, or inspect it with:
+
+```bash
+python tools/postgres_backup.py prune --dry-run
+```
+
+Retention applies to the local backup directory. Configure a lifecycle rule or scheduled
+cleanup on the off-host destination separately; `TOMS_BACKUP_OFFSITE_DIR` must point at a
+mounted remote or another genuinely separate host, not a second directory on the same disk.
+
+`restore-test` decrypts the latest backup, restores it into a new `toms_restore_*` database,
+compares the key-table counts with the manifest, and drops the scratch database. It needs
+`CREATEDB`; if the application role does not have it, set a separate maintenance connection:
+
+```bash
+export TOMS_BACKUP_RESTORE_ADMIN_URL=postgresql://ADMIN:PASSWORD@HOST:5432/postgres
+```
+
+Use `restore-test --keep` to retain the scratch database for inspection. Use
+`TOMS_BACKUP_SNAPSHOT=0` only if a transaction pooler rejects exported snapshots; the manifest
+records whether a snapshot was used.
+
+The passphrase or private key must not be stored next to the backups. The script does not
+include uploaded evidence files (`approved_pdfs/`, `signatures/`, `static/unit_logos/`); back
+those up separately.
+
+### 2.2 Scheduled backups and restore drills
+
+The repository includes systemd units for a nightly backup and a monthly restore drill:
+
+* `deploy/systemd/towems-backup.service`
+* `deploy/systemd/towems-backup.timer` (02:15 daily, persistent)
+* `deploy/systemd/towems-restore-test.service`
+* `deploy/systemd/towems-restore-test.timer` (03:30 on the first of each month)
+* `deploy/systemd/backup.env.example`
+
+Install them on the host, adjusting `/srv/toms` and the `towems` service account if the
+deployment layout differs:
+
+```bash
+sudo install -d -m 0750 /etc/towems
+sudo install -m 0600 deploy/systemd/backup.env.example /etc/towems/backup.env
+sudoedit /etc/towems/backup.env                 # set DATABASE_URL and GPG/off-site values
+
+sudo cp deploy/systemd/towems-backup.service \
+  deploy/systemd/towems-backup.timer \
+  deploy/systemd/towems-restore-test.service \
+  deploy/systemd/towems-restore-test.timer \
+  /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now towems-backup.timer towems-restore-test.timer
+```
+
+Run both jobs once by hand before relying on the timers:
+
+```bash
+sudo systemctl start towems-backup.service
+sudo journalctl -u towems-backup.service -n 50 --no-pager
+sudo systemctl start towems-restore-test.service
+sudo journalctl -u towems-restore-test.service -n 50 --no-pager
+sudo systemctl list-timers 'towems-*'
+```
+
+The units run as `towems`, so the public key or passphrase file must be readable by that
+account. The restore timer creates and drops a temporary `toms_restore_*` database; set
+`TOMS_BACKUP_RESTORE_ADMIN_URL` when the application role lacks `CREATEDB`.
+
+If the host does not use systemd, the equivalent cron entries are:
+
+```cron
+15 2 * * * cd /srv/toms && .venv-toms/bin/python tools/postgres_backup.py backup
+30 3 1 * * cd /srv/toms && .venv-toms/bin/python tools/postgres_backup.py restore-test
+```
 
 ## 3. Configuration (secrets, never in the repo)
 
@@ -188,8 +305,10 @@ Rollback triggers: login failures, wrong dashboard/risk counts, any
 
 ## 8. Ongoing operations
 
-* **Backups:** rely on the managed database's automated backups *and* a nightly `pg_dump`
-  to off-host storage; test a restore monthly.
+* **Backups:** rely on the managed database's automated backups *and* run
+  `python tools/postgres_backup.py backup` nightly (or enable the supplied systemd timer).
+  Run `python tools/postgres_backup.py restore-test` at least monthly and keep the passphrase
+  or private key separate from the backup destination.
 * **Logs:** Django logging level via `TOMS_LOG_LEVEL`; legacy `logs/` remains in place for
   the Flask app.
 * **Secrets:** rotate `DJANGO_SECRET_KEY` and DB credentials through the DO secrets store;

@@ -1,0 +1,13 @@
+[Unit]
+Description=Monthly TOWEMS PostgreSQL restore drill
+Requires=towems-restore-test.service
+
+[Timer]
+Unit=towems-restore-test.service
+OnCalendar=*-*-01 03:30:00
+Persistent=true
+RandomizedDelaySec=30m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

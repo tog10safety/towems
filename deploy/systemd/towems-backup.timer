@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly TOWEMS encrypted PostgreSQL backup
+Requires=towems-backup.service
+
+[Timer]
+Unit=towems-backup.service
+OnCalendar=*-*-* 02:15:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=TOWEMS PostgreSQL restore drill
+Documentation=file:///srv/toms/docs/DEPLOYMENT_AND_ROLLBACK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=towems
+Group=towems
+WorkingDirectory=/srv/toms
+EnvironmentFile=/etc/towems/backup.env
+ExecStart=/srv/toms/.venv-toms/bin/python /srv/toms/tools/postgres_backup.py restore-test
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=2h
+SyslogIdentifier=towems-restore-test
