@@ -14,14 +14,14 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: mrm-system/toms_backend
+        working-directory: toms_backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: mrm-system/toms_backend/requirements.txt
+          cache-dependency-path: toms_backend/requirements.txt
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
       - name: Run tests
@@ -33,14 +33,14 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: mrm-system/toms_frontend
+        working-directory: toms_frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: mrm-system/toms_frontend/package-lock.json
+          cache-dependency-path: toms_frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
       - name: Build production bundle
