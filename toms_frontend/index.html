@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>TOWEMS — Tactical Operations Wings Enterprise Management System</title>
+    <script>
+      // Apply the saved appearance before the first paint so the sign-in page
+      // and the app never flash the wrong theme. Mirrors src/theme/ThemeContext.jsx.
+      (function () {
+        try {
+          var saved = window.localStorage.getItem("toms.theme");
+          if (saved !== "light" && saved !== "dark" && saved !== "system") saved = "system";
+          var resolved =
+            saved === "system"
+              ? window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark"
+              : saved;
+          document.documentElement.dataset.theme = resolved;
+        } catch (error) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

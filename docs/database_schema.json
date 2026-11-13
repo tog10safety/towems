@@ -1,0 +1,2416 @@
+{
+  "tables": [
+    {
+      "schema": "public",
+      "name": "feedback_notifications",
+      "row_count": 6,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('feedback_notifications_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "feedback_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "unit_safety_officer_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "is_read",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "created_at",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "read_at",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "feedback_id",
+          "foreign_schema": "public",
+          "foreign_table": "mrm_feedback",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "unit_safety_officer_id",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "feedback_notifications_pkey",
+          "indexdef": "CREATE UNIQUE INDEX feedback_notifications_pkey ON public.feedback_notifications USING btree (id)"
+        },
+        {
+          "indexname": "idx_feedback_notifications_officer_read",
+          "indexdef": "CREATE INDEX idx_feedback_notifications_officer_read ON public.feedback_notifications USING btree (unit_safety_officer_id, is_read)"
+        },
+        {
+          "indexname": "idx_notifications_officer_read",
+          "indexdef": "CREATE INDEX idx_notifications_officer_read ON public.feedback_notifications USING btree (unit_safety_officer_id, is_read)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "hazard_registry",
+      "row_count": 1923,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('hazard_registry_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "unit",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "activity_code",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "hazard_description",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "before_likelihood",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "before_severity",
+          "data_type": "USER-DEFINED",
+          "udt_name": "severity_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "before_risk_rating",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 5,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "mitigations",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "after_likelihood",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "after_severity",
+          "data_type": "USER-DEFINED",
+          "udt_name": "severity_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "after_risk_rating",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 5,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "date_updated",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "created_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "created_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "hazard_registry_pkey",
+          "indexdef": "CREATE UNIQUE INDEX hazard_registry_pkey ON public.hazard_registry USING btree (id)"
+        },
+        {
+          "indexname": "idx_hazard_created_by_date",
+          "indexdef": "CREATE INDEX idx_hazard_created_by_date ON public.hazard_registry USING btree (created_by, date_updated)"
+        },
+        {
+          "indexname": "idx_hazard_risk_ratings",
+          "indexdef": "CREATE INDEX idx_hazard_risk_ratings ON public.hazard_registry USING btree (before_risk_rating, after_risk_rating)"
+        },
+        {
+          "indexname": "idx_hazard_unit_activity",
+          "indexdef": "CREATE INDEX idx_hazard_unit_activity ON public.hazard_registry USING btree (unit, activity_code)"
+        },
+        {
+          "indexname": "idx_hazard_unit_date",
+          "indexdef": "CREATE INDEX idx_hazard_unit_date ON public.hazard_registry USING btree (unit, date_updated)"
+        },
+        {
+          "indexname": "ix_hazard_registry_after_risk_rating",
+          "indexdef": "CREATE INDEX ix_hazard_registry_after_risk_rating ON public.hazard_registry USING btree (after_risk_rating)"
+        },
+        {
+          "indexname": "ix_hazard_registry_before_risk_rating",
+          "indexdef": "CREATE INDEX ix_hazard_registry_before_risk_rating ON public.hazard_registry USING btree (before_risk_rating)"
+        },
+        {
+          "indexname": "ix_hazard_registry_date_updated",
+          "indexdef": "CREATE INDEX ix_hazard_registry_date_updated ON public.hazard_registry USING btree (date_updated)"
+        },
+        {
+          "indexname": "ix_hazard_registry_unit",
+          "indexdef": "CREATE INDEX ix_hazard_registry_unit ON public.hazard_registry USING btree (unit)"
+        },
+        {
+          "indexname": "idx_hazard_unit_id",
+          "indexdef": "CREATE INDEX idx_hazard_unit_id ON public.hazard_registry USING btree (unit_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "mission_hazards",
+      "row_count": 4461,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('mission_hazards_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "mrm_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "hazard_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "mitigation_override",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "selected",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "override_likelihood",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "override_severity",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 1,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "additional_mitigations",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "hazard_id",
+          "foreign_schema": "public",
+          "foreign_table": "hazard_registry",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "mrm_id",
+          "foreign_schema": "public",
+          "foreign_table": "mrm_forms",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "mission_hazards_pkey",
+          "indexdef": "CREATE UNIQUE INDEX mission_hazards_pkey ON public.mission_hazards USING btree (id)"
+        },
+        {
+          "indexname": "idx_mission_hazards_mrm_hazard",
+          "indexdef": "CREATE UNIQUE INDEX idx_mission_hazards_mrm_hazard ON public.mission_hazards USING btree (mrm_id, hazard_id)"
+        },
+        {
+          "indexname": "idx_mission_hazards_selected",
+          "indexdef": "CREATE INDEX idx_mission_hazards_selected ON public.mission_hazards USING btree (mrm_id, selected)"
+        },
+        {
+          "indexname": "ix_mission_hazards_hazard_id",
+          "indexdef": "CREATE INDEX ix_mission_hazards_hazard_id ON public.mission_hazards USING btree (hazard_id)"
+        },
+        {
+          "indexname": "ix_mission_hazards_mrm_id",
+          "indexdef": "CREATE INDEX ix_mission_hazards_mrm_id ON public.mission_hazards USING btree (mrm_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "mrm_feedback",
+      "row_count": 2,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('mrm_feedback_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "mrm_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "user_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "risk_assessment_accuracy",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "hazard_identification_rating",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "mitigation_effectiveness",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "what_went_well",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "what_could_be_improved",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "new_hazards_identified",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "lessons_learned",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "additional_comments",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "recommend_add_to_hazard_registry",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "recommended_hazard_description",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "recommended_mitigations",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "submitted_at",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "is_anonymous",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "reviewed_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "reviewed_at",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "review_notes",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "status",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 20,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "action_taken",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "action_taken_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "action_taken_at",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "action_taken_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "mrm_id",
+          "foreign_schema": "public",
+          "foreign_table": "mrm_forms",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "reviewed_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "user_id",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "mrm_feedback_pkey",
+          "indexdef": "CREATE UNIQUE INDEX mrm_feedback_pkey ON public.mrm_feedback USING btree (id)"
+        },
+        {
+          "indexname": "ix_mrm_feedback_user_id",
+          "indexdef": "CREATE INDEX ix_mrm_feedback_user_id ON public.mrm_feedback USING btree (user_id)"
+        },
+        {
+          "indexname": "ix_mrm_feedback_submitted_at",
+          "indexdef": "CREATE INDEX ix_mrm_feedback_submitted_at ON public.mrm_feedback USING btree (submitted_at)"
+        },
+        {
+          "indexname": "idx_feedback_mrm_status",
+          "indexdef": "CREATE INDEX idx_feedback_mrm_status ON public.mrm_feedback USING btree (mrm_id, status)"
+        },
+        {
+          "indexname": "ix_mrm_feedback_mrm_id",
+          "indexdef": "CREATE INDEX ix_mrm_feedback_mrm_id ON public.mrm_feedback USING btree (mrm_id)"
+        },
+        {
+          "indexname": "idx_feedback_user_date",
+          "indexdef": "CREATE INDEX idx_feedback_user_date ON public.mrm_feedback USING btree (user_id, submitted_at)"
+        },
+        {
+          "indexname": "idx_feedback_status_reviewed",
+          "indexdef": "CREATE INDEX idx_feedback_status_reviewed ON public.mrm_feedback USING btree (status, reviewed_by)"
+        },
+        {
+          "indexname": "idx_feedback_mrm_id",
+          "indexdef": "CREATE INDEX idx_feedback_mrm_id ON public.mrm_feedback USING btree (mrm_id)"
+        },
+        {
+          "indexname": "idx_feedback_user_id",
+          "indexdef": "CREATE INDEX idx_feedback_user_id ON public.mrm_feedback USING btree (user_id)"
+        },
+        {
+          "indexname": "idx_feedback_status",
+          "indexdef": "CREATE INDEX idx_feedback_status ON public.mrm_feedback USING btree (status)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "mrm_forms",
+      "row_count": 292,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('mrm_forms_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "mrm_number",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 20,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "activity_mission",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 255,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "created_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "reviewed_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "date_created",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "safety_objectives",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "imsafes",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "aircraft_vehicle",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 255,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "environment",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "mission_statement",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "max_risk",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "residual_risk",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "total_percent",
+          "data_type": "double precision",
+          "udt_name": "float8",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 53,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "authority_level",
+          "data_type": "USER-DEFINED",
+          "udt_name": "authority_level_enum",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "status",
+          "data_type": "USER-DEFINED",
+          "udt_name": "mrm_status_enum",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "date_submitted",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "date_reviewed",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "review_status",
+          "data_type": "USER-DEFINED",
+          "udt_name": "review_status_enum",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "review_notes",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "creator_signed",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "creator_signature_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "evaluator_signed",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "evaluator_signature_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "authority_assigned_to",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "authority_approved",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "authority_approval_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "authority_signature_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "approved_pdf_filename",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 255,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "last_edited",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "last_edited_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "edit_history",
+          "data_type": "jsonb",
+          "udt_name": "jsonb",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "original_unit",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "original_creator_unit",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "original_reviewer_unit",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "original_authority_unit",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "risk_category",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 20,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "completion_time_seconds",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "date_approved",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "reviewer_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 200,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "authority_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 200,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "creator_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 200,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "original_unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "original_creator_unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "original_reviewer_unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "original_authority_unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "feedback_deadline",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "feedback_collection_closed",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": "false",
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "debrief_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "lessons_learned_summary",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "authority_assigned_to",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "created_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "last_edited_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "original_authority_unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "original_creator_unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "original_reviewer_unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "original_unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "reviewed_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "mrm_forms_pkey",
+          "indexdef": "CREATE UNIQUE INDEX mrm_forms_pkey ON public.mrm_forms USING btree (id)"
+        },
+        {
+          "indexname": "idx_mrm_authority_status",
+          "indexdef": "CREATE INDEX idx_mrm_authority_status ON public.mrm_forms USING btree (authority_assigned_to, authority_approved)"
+        },
+        {
+          "indexname": "idx_mrm_creator_status",
+          "indexdef": "CREATE INDEX idx_mrm_creator_status ON public.mrm_forms USING btree (created_by, status)"
+        },
+        {
+          "indexname": "idx_mrm_date_status",
+          "indexdef": "CREATE INDEX idx_mrm_date_status ON public.mrm_forms USING btree (date_created, status)"
+        },
+        {
+          "indexname": "idx_mrm_edit_history",
+          "indexdef": "CREATE INDEX idx_mrm_edit_history ON public.mrm_forms USING gin (edit_history)"
+        },
+        {
+          "indexname": "idx_mrm_reviewer_status",
+          "indexdef": "CREATE INDEX idx_mrm_reviewer_status ON public.mrm_forms USING btree (reviewed_by, review_status)"
+        },
+        {
+          "indexname": "idx_mrm_status_authority",
+          "indexdef": "CREATE INDEX idx_mrm_status_authority ON public.mrm_forms USING btree (status, authority_level)"
+        },
+        {
+          "indexname": "ix_mrm_forms_authority_assigned_to",
+          "indexdef": "CREATE INDEX ix_mrm_forms_authority_assigned_to ON public.mrm_forms USING btree (authority_assigned_to)"
+        },
+        {
+          "indexname": "ix_mrm_forms_authority_level",
+          "indexdef": "CREATE INDEX ix_mrm_forms_authority_level ON public.mrm_forms USING btree (authority_level)"
+        },
+        {
+          "indexname": "ix_mrm_forms_created_by",
+          "indexdef": "CREATE INDEX ix_mrm_forms_created_by ON public.mrm_forms USING btree (created_by)"
+        },
+        {
+          "indexname": "ix_mrm_forms_date_created",
+          "indexdef": "CREATE INDEX ix_mrm_forms_date_created ON public.mrm_forms USING btree (date_created)"
+        },
+        {
+          "indexname": "ix_mrm_forms_date_submitted",
+          "indexdef": "CREATE INDEX ix_mrm_forms_date_submitted ON public.mrm_forms USING btree (date_submitted)"
+        },
+        {
+          "indexname": "ix_mrm_forms_mrm_number",
+          "indexdef": "CREATE UNIQUE INDEX ix_mrm_forms_mrm_number ON public.mrm_forms USING btree (mrm_number)"
+        },
+        {
+          "indexname": "ix_mrm_forms_review_status",
+          "indexdef": "CREATE INDEX ix_mrm_forms_review_status ON public.mrm_forms USING btree (review_status)"
+        },
+        {
+          "indexname": "ix_mrm_forms_reviewed_by",
+          "indexdef": "CREATE INDEX ix_mrm_forms_reviewed_by ON public.mrm_forms USING btree (reviewed_by)"
+        },
+        {
+          "indexname": "ix_mrm_forms_status",
+          "indexdef": "CREATE INDEX ix_mrm_forms_status ON public.mrm_forms USING btree (status)"
+        },
+        {
+          "indexname": "idx_mrm_original_unit",
+          "indexdef": "CREATE INDEX idx_mrm_original_unit ON public.mrm_forms USING btree (original_unit)"
+        },
+        {
+          "indexname": "idx_mrm_risk_category",
+          "indexdef": "CREATE INDEX idx_mrm_risk_category ON public.mrm_forms USING btree (risk_category)"
+        },
+        {
+          "indexname": "idx_mrm_date_approved",
+          "indexdef": "CREATE INDEX idx_mrm_date_approved ON public.mrm_forms USING btree (date_approved)"
+        },
+        {
+          "indexname": "idx_mrm_original_creator_unit",
+          "indexdef": "CREATE INDEX idx_mrm_original_creator_unit ON public.mrm_forms USING btree (original_creator_unit)"
+        },
+        {
+          "indexname": "idx_mrm_risk_category_unit",
+          "indexdef": "CREATE INDEX idx_mrm_risk_category_unit ON public.mrm_forms USING btree (risk_category, original_unit)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "mrm_personnel",
+      "row_count": 9,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('mrm_personnel_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "mrm_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "user_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "role",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "tagged_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "tagged_at",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "is_active",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "mrm_id",
+          "foreign_schema": "public",
+          "foreign_table": "mrm_forms",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "tagged_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "user_id",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "mrm_personnel_pkey",
+          "indexdef": "CREATE UNIQUE INDEX mrm_personnel_pkey ON public.mrm_personnel USING btree (id)"
+        },
+        {
+          "indexname": "idx_mrm_personnel_mrm_user",
+          "indexdef": "CREATE UNIQUE INDEX idx_mrm_personnel_mrm_user ON public.mrm_personnel USING btree (mrm_id, user_id)"
+        },
+        {
+          "indexname": "idx_mrm_personnel_user_active",
+          "indexdef": "CREATE INDEX idx_mrm_personnel_user_active ON public.mrm_personnel USING btree (user_id, is_active)"
+        },
+        {
+          "indexname": "ix_mrm_personnel_user_id",
+          "indexdef": "CREATE INDEX ix_mrm_personnel_user_id ON public.mrm_personnel USING btree (user_id)"
+        },
+        {
+          "indexname": "ix_mrm_personnel_mrm_id",
+          "indexdef": "CREATE INDEX ix_mrm_personnel_mrm_id ON public.mrm_personnel USING btree (mrm_id)"
+        },
+        {
+          "indexname": "idx_mrm_personnel_mrm_id",
+          "indexdef": "CREATE INDEX idx_mrm_personnel_mrm_id ON public.mrm_personnel USING btree (mrm_id)"
+        },
+        {
+          "indexname": "idx_mrm_personnel_user_id",
+          "indexdef": "CREATE INDEX idx_mrm_personnel_user_id ON public.mrm_personnel USING btree (user_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "unit_assignments",
+      "row_count": 0,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('unit_assignments_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "user_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "assigned_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "is_primary",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "user_id",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "unit_assignments_pkey",
+          "indexdef": "CREATE UNIQUE INDEX unit_assignments_pkey ON public.unit_assignments USING btree (id)"
+        },
+        {
+          "indexname": "idx_unit_assignments_unit",
+          "indexdef": "CREATE INDEX idx_unit_assignments_unit ON public.unit_assignments USING btree (unit_id)"
+        },
+        {
+          "indexname": "ix_unit_assignments_user_id",
+          "indexdef": "CREATE INDEX ix_unit_assignments_user_id ON public.unit_assignments USING btree (user_id)"
+        },
+        {
+          "indexname": "idx_unit_assignments_user",
+          "indexdef": "CREATE INDEX idx_unit_assignments_user ON public.unit_assignments USING btree (user_id)"
+        },
+        {
+          "indexname": "ix_unit_assignments_unit_id",
+          "indexdef": "CREATE INDEX ix_unit_assignments_unit_id ON public.unit_assignments USING btree (unit_id)"
+        },
+        {
+          "indexname": "idx_unit_assignments_user_unit",
+          "indexdef": "CREATE UNIQUE INDEX idx_unit_assignments_user_unit ON public.unit_assignments USING btree (user_id, unit_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "unit_logos",
+      "row_count": 6,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('unit_logos_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "unit_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "logo_filename",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 200,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "date_uploaded",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "uploaded_by",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        },
+        {
+          "column_name": "uploaded_by",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "unit_logos_pkey",
+          "indexdef": "CREATE UNIQUE INDEX unit_logos_pkey ON public.unit_logos USING btree (id)"
+        },
+        {
+          "indexname": "idx_unit_logos_uploaded_date",
+          "indexdef": "CREATE INDEX idx_unit_logos_uploaded_date ON public.unit_logos USING btree (date_uploaded)"
+        },
+        {
+          "indexname": "ix_unit_logos_unit_name",
+          "indexdef": "CREATE UNIQUE INDEX ix_unit_logos_unit_name ON public.unit_logos USING btree (unit_name)"
+        },
+        {
+          "indexname": "unit_logos_unit_id_key",
+          "indexdef": "CREATE UNIQUE INDEX unit_logos_unit_id_key ON public.unit_logos USING btree (unit_id)"
+        },
+        {
+          "indexname": "idx_unit_logos_unit_id",
+          "indexdef": "CREATE INDEX idx_unit_logos_unit_id ON public.unit_logos USING btree (unit_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "units",
+      "row_count": 6,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('units_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "acronym",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 20,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "category",
+          "data_type": "USER-DEFINED",
+          "udt_name": "unit_category_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "location",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 200,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "parent_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "commanding_officer",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "date_created",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "is_active",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "parent_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "units_pkey",
+          "indexdef": "CREATE UNIQUE INDEX units_pkey ON public.units USING btree (id)"
+        },
+        {
+          "indexname": "idx_units_acronym_active",
+          "indexdef": "CREATE INDEX idx_units_acronym_active ON public.units USING btree (acronym, is_active)"
+        },
+        {
+          "indexname": "ix_units_acronym",
+          "indexdef": "CREATE INDEX ix_units_acronym ON public.units USING btree (acronym)"
+        },
+        {
+          "indexname": "ix_units_is_active",
+          "indexdef": "CREATE INDEX ix_units_is_active ON public.units USING btree (is_active)"
+        },
+        {
+          "indexname": "ix_units_parent_id",
+          "indexdef": "CREATE INDEX ix_units_parent_id ON public.units USING btree (parent_id)"
+        },
+        {
+          "indexname": "ix_units_name",
+          "indexdef": "CREATE UNIQUE INDEX ix_units_name ON public.units USING btree (name)"
+        },
+        {
+          "indexname": "idx_units_active",
+          "indexdef": "CREATE INDEX idx_units_active ON public.units USING btree (is_active)"
+        },
+        {
+          "indexname": "idx_units_category",
+          "indexdef": "CREATE INDEX idx_units_category ON public.units USING btree (category)"
+        },
+        {
+          "indexname": "idx_units_parent",
+          "indexdef": "CREATE INDEX idx_units_parent ON public.units USING btree (parent_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "user_activities",
+      "row_count": 2612,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('user_activities_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "user_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "activity_type",
+          "data_type": "USER-DEFINED",
+          "udt_name": "activity_type_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "module",
+          "data_type": "USER-DEFINED",
+          "udt_name": "module_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "description",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "ip_address",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 45,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "user_agent",
+          "data_type": "text",
+          "udt_name": "text",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "resource_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "resource_type",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 50,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "activity_data",
+          "data_type": "jsonb",
+          "udt_name": "jsonb",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "timestamp",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "user_id",
+          "foreign_schema": "public",
+          "foreign_table": "users",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "user_activities_pkey",
+          "indexdef": "CREATE UNIQUE INDEX user_activities_pkey ON public.user_activities USING btree (id)"
+        },
+        {
+          "indexname": "idx_activities_activity_data",
+          "indexdef": "CREATE INDEX idx_activities_activity_data ON public.user_activities USING gin (activity_data)"
+        },
+        {
+          "indexname": "idx_activities_brin_timestamp",
+          "indexdef": "CREATE INDEX idx_activities_brin_timestamp ON public.user_activities USING brin (\"timestamp\")"
+        },
+        {
+          "indexname": "idx_activities_module_timestamp",
+          "indexdef": "CREATE INDEX idx_activities_module_timestamp ON public.user_activities USING btree (module, \"timestamp\")"
+        },
+        {
+          "indexname": "idx_activities_resource",
+          "indexdef": "CREATE INDEX idx_activities_resource ON public.user_activities USING btree (resource_type, resource_id)"
+        },
+        {
+          "indexname": "idx_activities_type_timestamp",
+          "indexdef": "CREATE INDEX idx_activities_type_timestamp ON public.user_activities USING btree (activity_type, \"timestamp\")"
+        },
+        {
+          "indexname": "idx_activities_user_timestamp",
+          "indexdef": "CREATE INDEX idx_activities_user_timestamp ON public.user_activities USING btree (user_id, \"timestamp\")"
+        },
+        {
+          "indexname": "ix_user_activities_activity_type",
+          "indexdef": "CREATE INDEX ix_user_activities_activity_type ON public.user_activities USING btree (activity_type)"
+        },
+        {
+          "indexname": "ix_user_activities_module",
+          "indexdef": "CREATE INDEX ix_user_activities_module ON public.user_activities USING btree (module)"
+        },
+        {
+          "indexname": "ix_user_activities_resource_id",
+          "indexdef": "CREATE INDEX ix_user_activities_resource_id ON public.user_activities USING btree (resource_id)"
+        },
+        {
+          "indexname": "ix_user_activities_resource_type",
+          "indexdef": "CREATE INDEX ix_user_activities_resource_type ON public.user_activities USING btree (resource_type)"
+        },
+        {
+          "indexname": "ix_user_activities_timestamp",
+          "indexdef": "CREATE INDEX ix_user_activities_timestamp ON public.user_activities USING btree (\"timestamp\")"
+        },
+        {
+          "indexname": "ix_user_activities_user_id",
+          "indexdef": "CREATE INDEX ix_user_activities_user_id ON public.user_activities USING btree (user_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "users",
+      "row_count": 484,
+      "pk": [
+        "id"
+      ],
+      "columns": [
+        {
+          "column_name": "id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "NO",
+          "column_default": "nextval('users_id_seq'::regclass)",
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        },
+        {
+          "column_name": "username",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 80,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "password_hash",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 255,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "authority",
+          "data_type": "USER-DEFINED",
+          "udt_name": "authority_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "category",
+          "data_type": "USER-DEFINED",
+          "udt_name": "category_enum",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "rank",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 50,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "designation",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "first_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "middle_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "last_name",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "serial_number",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 50,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "branch_of_service",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "unit",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "NO",
+          "column_default": null,
+          "character_maximum_length": 100,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "contact_number",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 20,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "signature_filename",
+          "data_type": "character varying",
+          "udt_name": "varchar",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": 200,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "date_created",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "is_active",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "password_changed_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "password_expiry_date",
+          "data_type": "timestamp without time zone",
+          "udt_name": "timestamp",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "password_expiry_notified",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "force_password_change",
+          "data_type": "boolean",
+          "udt_name": "bool",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": null,
+          "numeric_scale": null
+        },
+        {
+          "column_name": "unit_id",
+          "data_type": "integer",
+          "udt_name": "int4",
+          "is_nullable": "YES",
+          "column_default": null,
+          "character_maximum_length": null,
+          "numeric_precision": 32,
+          "numeric_scale": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column_name": "unit_id",
+          "foreign_schema": "public",
+          "foreign_table": "units",
+          "foreign_column": "id",
+          "delete_rule": "NO ACTION"
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "users_pkey",
+          "indexdef": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)"
+        },
+        {
+          "indexname": "idx_users_active_authority",
+          "indexdef": "CREATE INDEX idx_users_active_authority ON public.users USING btree (is_active, authority)"
+        },
+        {
+          "indexname": "idx_users_authority_unit",
+          "indexdef": "CREATE INDEX idx_users_authority_unit ON public.users USING btree (authority, unit)"
+        },
+        {
+          "indexname": "idx_users_full_name",
+          "indexdef": "CREATE INDEX idx_users_full_name ON public.users USING btree (first_name, last_name)"
+        },
+        {
+          "indexname": "idx_users_password_expiry",
+          "indexdef": "CREATE INDEX idx_users_password_expiry ON public.users USING btree (password_expiry_date, force_password_change)"
+        },
+        {
+          "indexname": "idx_users_unit_active",
+          "indexdef": "CREATE INDEX idx_users_unit_active ON public.users USING btree (unit, is_active)"
+        },
+        {
+          "indexname": "ix_users_force_password_change",
+          "indexdef": "CREATE INDEX ix_users_force_password_change ON public.users USING btree (force_password_change)"
+        },
+        {
+          "indexname": "ix_users_is_active",
+          "indexdef": "CREATE INDEX ix_users_is_active ON public.users USING btree (is_active)"
+        },
+        {
+          "indexname": "ix_users_password_expiry_date",
+          "indexdef": "CREATE INDEX ix_users_password_expiry_date ON public.users USING btree (password_expiry_date)"
+        },
+        {
+          "indexname": "ix_users_serial_number",
+          "indexdef": "CREATE UNIQUE INDEX ix_users_serial_number ON public.users USING btree (serial_number)"
+        },
+        {
+          "indexname": "ix_users_unit",
+          "indexdef": "CREATE INDEX ix_users_unit ON public.users USING btree (unit)"
+        },
+        {
+          "indexname": "ix_users_username",
+          "indexdef": "CREATE UNIQUE INDEX ix_users_username ON public.users USING btree (username)"
+        },
+        {
+          "indexname": "idx_users_unit_id",
+          "indexdef": "CREATE INDEX idx_users_unit_id ON public.users USING btree (unit_id)"
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "typname": "activity_type_enum",
+      "labels": "login,logout,create_hazard,edit_hazard,delete_hazard,create_mrm,edit_mrm,submit_mrm,review_mrm,approve_mrm,export_data,import_data,user_created,user_modified,password_changed,signature_uploaded,system_access"
+    },
+    {
+      "typname": "authority_enum",
+      "labels": "Administrator,Evaluator,Creator,Unit Safety Officer"
+    },
+    {
+      "typname": "authority_level_enum",
+      "labels": "Operator,Supervisor,Squadron Commander,Director for Operations,Commander"
+    },
+    {
+      "typname": "category_enum",
+      "labels": "Officer,Enlisted Personnel,Civilian Human Resource (CivHR)"
+    },
+    {
+      "typname": "module_enum",
+      "labels": "auth,hazards,mrm,admin,users,unit_safety"
+    },
+    {
+      "typname": "mrm_status_enum",
+      "labels": "draft,submitted,reviewed"
+    },
+    {
+      "typname": "review_status_enum",
+      "labels": "pending,approved,rejected,needs_revision"
+    },
+    {
+      "typname": "severity_enum",
+      "labels": "A,B,C,D,E"
+    },
+    {
+      "typname": "unit_category_enum",
+      "labels": "Command,Wing,Group,Center,Squadron"
+    }
+  ],
+  "extensions": [
+    "plpgsql"
+  ],
+  "server_version": "18.4",
+  "database": "mrm_system",
+  "role": "postgres"
+}

@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# Secrets and machine-local configuration
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+# Legacy Flask settings contain a local credential fallback and are not source
+# for the Django application. Keep them out of version control.
+config.py
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+.venv-*/
+venv/
+myenv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Node / build output
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+.vite/
+
+# ---------------------------------------------------------------------------
+# Runtime output
+# ---------------------------------------------------------------------------
+*.log
+logs/
+.runlogs/
+uploads/
+signatures/
+approved_pdfs/
+static/signatures/
+static/unit_logos/
+samples/
+_backups/
+
+# Archived legacy application: retained on disk, not part of the current tree.
+Flask MRM OLD/
+
+# ---------------------------------------------------------------------------
+# Operational documents and local samples
+# ---------------------------------------------------------------------------
+/*.pdf
+/*.docx
+/~*
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/

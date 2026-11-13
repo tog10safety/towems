@@ -1,0 +1,24 @@
+{
+  "name": "towems-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Tactical Operations Wings Enterprise Management System - React frontend (Vite/Node tooling)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "dependencies": {
+    "leaflet": "1.9.4",
+    "pdfjs-dist": "4.10.38",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-leaflet": "4.2.1",
+    "react-router-dom": "6.26.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.1",
+    "vite": "5.4.8"
+  }
+}
