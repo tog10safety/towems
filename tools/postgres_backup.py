@@ -53,6 +53,7 @@ DEFAULT_KEY_TABLES = (
 )
 BACKUP_SUFFIX = ".dump.gpg"
 SCRATCH_PREFIX = "toms_restore_"
+RESTORE_STATUS_FILENAME = "restore-drill.json"
 
 
 class BackupError(RuntimeError):
@@ -165,9 +166,13 @@ def load_local_environment() -> None:
     load_dotenv(env_path, override=False)
 
 
-def backup_directory(explicit: str | None) -> Path:
+def resolve_backup_directory(explicit: str | None) -> Path:
     raw = explicit or os.environ.get("TOMS_BACKUP_DIR") or str(DEFAULT_BACKUP_DIR)
-    path = Path(raw).expanduser().resolve()
+    return Path(raw).expanduser().resolve()
+
+
+def backup_directory(explicit: str | None) -> Path:
+    path = resolve_backup_directory(explicit)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -765,6 +770,27 @@ def restore_test(args: argparse.Namespace) -> int:
         print(f"  counts match: {format_counts(actual_counts)}")
 
         print("[5/5] Restore drill passed.")
+        completed_at = datetime.now(timezone.utc).replace(microsecond=0)
+        try:
+            write_json_atomic(
+                directory / RESTORE_STATUS_FILENAME,
+                {
+                    "format": 1,
+                    "completed_at": completed_at.isoformat().replace("+00:00", "Z"),
+                    "backup": encrypted.name,
+                    "backup_created_at": manifest.get("created_at"),
+                    "backup_sha256": actual_digest,
+                    "scratch_database": scratch,
+                    "kept": bool(args.keep),
+                    "row_counts": actual_counts,
+                },
+            )
+        except OSError as exc:
+            print(
+                f"Warning: could not record the restore drill in "
+                f"{directory / RESTORE_STATUS_FILENAME}: {exc}",
+                file=sys.stderr,
+            )
         if args.keep:
             print(f"Scratch database kept for inspection: {scratch}")
         return 0

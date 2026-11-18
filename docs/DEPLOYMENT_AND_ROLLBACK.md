@@ -102,20 +102,27 @@ export TOMS_BACKUP_RESTORE_ADMIN_URL=postgresql://ADMIN:PASSWORD@HOST:5432/postg
 
 Use `restore-test --keep` to retain the scratch database for inspection. Use
 `TOMS_BACKUP_SNAPSHOT=0` only if a transaction pooler rejects exported snapshots; the manifest
-records whether a snapshot was used.
+records whether a snapshot was used. A successful drill writes `restore-drill.json` in the
+backup directory; that marker is what the health check uses to prove a recent restore test
+passed. Do not edit or copy it by hand.
 
 The passphrase or private key must not be stored next to the backups. The script does not
 include uploaded evidence files (`approved_pdfs/`, `signatures/`, `static/unit_logos/`); back
-those up separately.
+those up separately. For recipient rotation, follow the
+[backup GPG key-rotation runbook](BACKUP_KEY_ROTATION.md); it covers overlap, restore
+verification, and retention of the old private key.
 
 ### 2.2 Scheduled backups and restore drills
 
-The repository includes systemd units for a nightly backup and a monthly restore drill:
+The repository includes systemd units for a nightly backup, a monthly restore drill and a
+daily health check:
 
 * `deploy/systemd/towems-backup.service`
 * `deploy/systemd/towems-backup.timer` (02:15 daily, persistent)
 * `deploy/systemd/towems-restore-test.service`
 * `deploy/systemd/towems-restore-test.timer` (03:30 on the first of each month)
+* `deploy/systemd/towems-backup-health.service`
+* `deploy/systemd/towems-backup-health.timer` (04:30 daily)
 * `deploy/systemd/backup.env.example`
 
 Install them on the host, adjusting `/srv/toms` and the `towems` service account if the
@@ -130,18 +137,23 @@ sudo cp deploy/systemd/towems-backup.service \
   deploy/systemd/towems-backup.timer \
   deploy/systemd/towems-restore-test.service \
   deploy/systemd/towems-restore-test.timer \
+  deploy/systemd/towems-backup-health.service \
+  deploy/systemd/towems-backup-health.timer \
   /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now towems-backup.timer towems-restore-test.timer
+sudo systemctl enable --now towems-backup.timer towems-restore-test.timer \
+  towems-backup-health.timer
 ```
 
-Run both jobs once by hand before relying on the timers:
+Run all three jobs once by hand before relying on the timers:
 
 ```bash
 sudo systemctl start towems-backup.service
 sudo journalctl -u towems-backup.service -n 50 --no-pager
 sudo systemctl start towems-restore-test.service
 sudo journalctl -u towems-restore-test.service -n 50 --no-pager
+sudo systemctl start towems-backup-health.service
+sudo journalctl -u towems-backup-health.service -n 50 --no-pager
 sudo systemctl list-timers 'towems-*'
 ```
 
@@ -149,11 +161,28 @@ The units run as `towems`, so the public key or passphrase file must be readable
 account. The restore timer creates and drops a temporary `toms_restore_*` database; set
 `TOMS_BACKUP_RESTORE_ADMIN_URL` when the application role lacks `CREATEDB`.
 
+`tools/backup_health.py` checks that the newest encrypted backup is less than 36 hours old,
+that its checksum matches the manifest, that a restore drill is recorded within 35 days, and,
+when `TOMS_BACKUP_OFFSITE_DIR` is set, that the newest backup, manifest and checksum are also
+present off-host and match. A missing marker or failed check exits non-zero. Configure
+`TOMS_BACKUP_ALERT_WEBHOOK` to receive a JSON alert (including a Slack-compatible `text`
+field); without a webhook, the non-zero systemd/cron result and journal entry are the alert.
+
+```bash
+python tools/backup_health.py
+python tools/backup_health.py --backup-dir /srv/toms/_backups/postgres
+```
+
+Tune the limits with `TOMS_BACKUP_MAX_AGE_HOURS` and `TOMS_RESTORE_MAX_AGE_DAYS`. After
+upgrading an existing installation, run `restore-test` once to create `restore-drill.json`;
+until then the health check correctly reports that no successful drill is recorded.
+
 If the host does not use systemd, the equivalent cron entries are:
 
 ```cron
 15 2 * * * cd /srv/toms && .venv-toms/bin/python tools/postgres_backup.py backup
 30 3 1 * * cd /srv/toms && .venv-toms/bin/python tools/postgres_backup.py restore-test
+30 4 * * * cd /srv/toms && .venv-toms/bin/python tools/backup_health.py
 ```
 
 ## 3. Configuration (secrets, never in the repo)

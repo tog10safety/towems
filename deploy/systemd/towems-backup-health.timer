@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily TOWEMS backup freshness check
+Requires=towems-backup-health.service
+
+[Timer]
+Unit=towems-backup-health.service
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

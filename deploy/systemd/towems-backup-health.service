@@ -1,0 +1,18 @@
+[Unit]
+Description=TOWEMS backup freshness health check
+Documentation=file:///srv/toms/docs/DEPLOYMENT_AND_ROLLBACK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=towems
+Group=towems
+WorkingDirectory=/srv/toms
+EnvironmentFile=/etc/towems/backup.env
+ExecStart=/srv/toms/.venv-toms/bin/python /srv/toms/tools/backup_health.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=5m
+SyslogIdentifier=towems-backup-health
