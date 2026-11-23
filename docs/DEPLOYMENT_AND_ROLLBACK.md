@@ -21,18 +21,32 @@
 | Piece | Value |
 | --- | --- |
 | Host | Ubuntu 22.04, `mrm-system.online`, 957 MB RAM |
-| Database | **Self-managed PostgreSQL 14.24 on the same droplet** (not a managed cluster), database `mrm_system` |
+| Database | **Self-managed PostgreSQL 14.24 on the same droplet** (not a managed cluster), database `mrm_system`; Django connects as **`towems`** (database/schema/table owner, `CREATEDB` for the restore drill, **not** superuser), Flask still uses `postgres` |
 | Application directory | `/var/www/towems` (git clone of this repository, `main`) |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
 | Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env` |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
-| Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg` |
+| Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg`; role password copies in `/etc/towems/towems_db_password` (0640 `root:www-data`) and `/etc/towems/postgres_password` (0600 root, operator only) |
 | Backups | `/var/backups/towems` (0600, `www-data`), passphrase `/etc/towems/backup.passphrase`; timers `towems-backup`, `towems-restore-test`, `towems-backup-health` installed with `/srv/toms` rewritten to `/var/www/towems` and `User=towems` to `www-data` |
 | Smoke account | `toms.smoke` (Administrator, profile + Authenticator complete); password only in `/etc/towems/smoke.credentials` (0600) |
 
 The scheduled jobs run as `www-data`, whose home is `/var/www`; `GNUPGHOME` must therefore be
 set in `backup.env`, and `/etc/towems` must be traversable (`root:www-data 0750`).
+
+### 1.2 Database roles
+
+| Role | Attributes | Used by |
+| --- | --- | --- |
+| `towems` | `LOGIN`, `CREATEDB`, owner of database `mrm_system`, schema `public` and every table, sequence, function and enum in it | Django (`/var/www/towems/.env`), backup and restore-drill timers (`/etc/towems/backup.env`) |
+| `postgres` | superuser | Flask rollback (`/etc/systemd/system/mrm.service`, `/var/www/mrm/.env`), operator tasks |
+| `mrm_user` | no login privileges in use | unused legacy role |
+
+Ownership is what lets `towems` run `migrate` (DDL) without superuser rights. When a *new*
+object is created outside Django by `postgres`, transfer it with
+`ALTER TABLE … OWNER TO towems` before the app needs to alter it. Rotate either password with
+`ALTER ROLE … PASSWORD` and update the two `.env` files plus the `mrm.service` environment,
+then restart `towems.service` (and `mrm.service` if it is enabled for a rollback).
 
 ## 2. Backup and recovery (do this first, every time)
 
