@@ -1,10 +1,8 @@
 # Deployment, Backup and Rollback — TOWEMS on DigitalOcean
 
-> **Production deployment and migration steps have not been executed.** No deployment, no
-> production migration and no production data change was performed during this engagement. Deployment topology,
-> credentials and the existing host layout are **UNVERIFIED from this machine** — verify each
-> step before running it. Production cutover requires your explicit approval (Stage 10 of
-> `MIGRATION_PLAN.md`).
+> **Production cutover executed on 2026-11-23** against `mrm-system.online`
+> (droplet `146.190.94.234`). Sections 1 and 1.1 record the layout that now runs there; the
+> remaining steps are the operating procedure for later releases.
 
 ---
 
@@ -12,11 +10,29 @@
 
 | Component | State |
 | --- | --- |
-| Legacy Flask MRMS | Unchanged, still runnable, still the production application. |
-| `toms_backend` (Django/DRF) | Built and tested; **not deployed**. |
-| `toms_frontend` (React/Vite) | Builds clean; **not deployed**. |
-| Production DB `mrm_system` | Untouched. No migration has ever run against it. |
-| Staging DB `toms_staging` | Clone of production + the 21 additive tables. Where all Django DDL ran. |
+| Legacy Flask MRMS | Installed at `/var/www/mrm`; `mrm.service` stopped and disabled (rollback path). |
+| `toms_backend` (Django/DRF) | Deployed at `/var/www/towems`, serving `127.0.0.1:8001` via `towems.service`. |
+| `toms_frontend` (React/Vite) | Deployed to `/var/www/towems/toms_frontend/dist` and served by nginx. |
+| Production DB `mrm_system` | 87 migrations applied; 11 legacy tables untouched and still mapped. |
+| Staging DB `toms_staging` | Clone of production + the 21 additive tables. Where all Django DDL ran first. |
+
+### 1.1 Production layout (as built on the droplet)
+
+| Piece | Value |
+| --- | --- |
+| Host | Ubuntu 22.04, `mrm-system.online`, 957 MB RAM |
+| Database | **Self-managed PostgreSQL 14.24 on the same droplet** (not a managed cluster), database `mrm_system` |
+| Application directory | `/var/www/towems` (git clone of this repository, `main`) |
+| Python | system `python3.10` with `/var/www/towems/venv` |
+| Node | **not installed** — build the SPA elsewhere and upload `dist/` |
+| Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env` |
+| Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
+| Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg` |
+| Backups | `/var/backups/towems` (0600, `www-data`), passphrase `/etc/towems/backup.passphrase`; timers `towems-backup`, `towems-restore-test`, `towems-backup-health` installed with `/srv/toms` rewritten to `/var/www/towems` and `User=towems` to `www-data` |
+| Smoke account | `toms.smoke` (Administrator, profile + Authenticator complete); password only in `/etc/towems/smoke.credentials` (0600) |
+
+The scheduled jobs run as `www-data`, whose home is `/var/www`; `GNUPGHOME` must therefore be
+set in `backup.env`, and `/etc/towems` must be traversable (`root:www-data 0750`).
 
 ## 2. Backup and recovery (do this first, every time)
 
@@ -374,13 +390,15 @@ an individual, reset their password through User Management instead.
        `index.html`.
 10.[ ] Smoke checks on the real host as a fully set-up account (the token route is gated):
        login with an existing account (Werkzeug hash path),
-       dashboard counts match legacy numbers, risk list shows the same 292 MRMs,
+       dashboard counts match legacy numbers (2026-11-23: 489 active personnel of 491 accounts,
+       1,653 MRM forms, 2,599 hazards, 8 units), risk list shows the same MRM total,
        create/edit one draft, MGRS conversion, CSV export.
 10a.[ ] GIS: `/api/map/config/` lists the configured basemaps, AOR / GIS page renders the
        province layer, and `POST /api/aor/assign/` as a non-Administrator returns 403.
 10b.[ ] User Management → *Setup outstanding* lists the accounts still to chase; the Gmail column
        matches the address each person enrolled.
-11.[ ] Old Flask app still running and reachable on its previous port (fallback).
+11.[ ] Old Flask app still installed; on the 2026-11-23 cutover `mrm.service` was **stopped and
+       disabled** to free memory (957 MB host). Re-enable and start it for a rollback.
 12.[ ] Monitor logs for 24–48 h before decommissioning anything.
 
 ## 7. Rollback
