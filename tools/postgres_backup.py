@@ -260,7 +260,10 @@ def write_checksum(path: Path) -> str:
 
 def _restrict_permissions(path: Path) -> None:
     try:
-        os.chmod(path, 0o600)
+        # A directory needs its owner's execute bit to stay usable, so 0600
+        # would leave even the owning account unable to write the dump inside
+        # the temporary work directory (only root bypasses that check).
+        os.chmod(path, 0o700 if path.is_dir() else 0o600)
     except OSError:
         # Windows ACLs are managed by the host; chmod is best-effort here.
         pass
