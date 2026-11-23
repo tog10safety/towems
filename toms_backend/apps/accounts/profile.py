@@ -4,9 +4,14 @@ Design rules taken straight from the specification:
 
 * A user edits **only their own** record - the endpoint has no user id at all,
   so a manipulated request cannot reach another account.
-* The permitted fields are an explicit allow-list. ``authority``, ``unit_id``,
-  ``username``, ``serial_number`` and ``is_active`` are not on it, so role,
-  unit and administrative status cannot be changed through this route.
+* The permitted fields are an explicit allow-list. ``authority``, ``username``,
+  ``serial_number`` and ``is_active`` are not on it, so role and administrative
+  status cannot be changed through this route.
+* ``unit_id`` is the one exception: a person may move themselves. The move is
+  deliberately lossy - every post held in the unit being left is ended (unit
+  appointments, office/section assignments, acting authority) and no post is
+  created in the new unit, so the account is left with the Creator role only.
+  A transfer can therefore lower authority but never raise it.
 * Passwords never appear: the existing ``ChangePasswordView`` handles them.
 * ``password_hash`` is never serialised.
 """
@@ -26,7 +31,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts import mfa, setup_gate
+from apps.accounts import mfa, ownership, setup_gate
 from apps.accounts.models import UserProfile
 from apps.accounts.personnel_details import (
     PERSONNEL_DETAIL_FIELDS,
@@ -43,12 +48,17 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MiB
 ALLOWED_IMAGE_TYPES = {"png", "jpg", "jpeg", "webp"}
 
+#: Moving to another unit. Handled separately from the plain detail fields
+#: because it ends every post the person holds and resets their account role.
+UNIT_TRANSFER_FIELD = "unit_id"
+
 #: Only these may be changed by the account owner.  Enlistment and
 #: commissioning dates remain administrative data, so they are excluded.
 SELF_EDITABLE_FIELDS = (
     "contact_number",
     "bio",
     *SELF_EDITABLE_DETAIL_FIELDS,
+    UNIT_TRANSFER_FIELD,
 )
 
 
@@ -213,6 +223,98 @@ def profile_payload(user) -> dict:
     }
 
 
+def change_unit(user, unit, *, request=None) -> dict:
+    """Move ``user`` to ``unit``, ending every post held in the old unit.
+
+    The point of the transfer is that nothing follows the person across: the
+    posts of the unit being left are ended (never deleted, so history and the
+    vacancy notices survive), acting authority is revoked, and the new unit
+    starts with no appointment at all. The account role is reset to Creator, so
+    a move can only ever reduce what somebody may do.
+    """
+    from django.db import transaction
+
+    from apps.command import services as command_services
+    from apps.command.models import ActingAppointment, SectionAssignment, UnitAppointment
+
+    with transaction.atomic():
+        previous_unit = user.unit
+        previous_unit_id = user.unit_id
+        previous_authority = user.authority
+
+        ended_posts: list[str] = []
+        ended_sections: list[str] = []
+        revoked_acting: list[str] = []
+
+        if previous_unit_id is not None:
+            reason = (
+                f"Unit transfer to {unit.acronym}: the post belonged to the "
+                "previous unit."
+            )
+            for appointment in UnitAppointment.objects.filter(
+                user_id=user.id, unit_id=previous_unit_id, is_active=True
+            ):
+                command_services.end_appointment(appointment, actor=user, reason=reason)
+                ended_posts.append(appointment.role)
+
+            assignments = SectionAssignment.objects.filter(
+                user_id=user.id, section__unit_id=previous_unit_id, is_active=True
+            ).select_related("section")
+            for assignment in assignments:
+                command_services.end_section_assignment(assignment, actor=user)
+                ended_sections.append(assignment.section.code or assignment.section.name)
+
+            for acting in ActingAppointment.objects.filter(
+                user_id=user.id,
+                unit_id=previous_unit_id,
+                is_active=True,
+                revoked_at__isnull=True,
+            ):
+                command_services.revoke_acting_appointment(
+                    acting, actor=user, reason="Unit transfer ended the delegation."
+                )
+                revoked_acting.append(acting.acting_role)
+
+        user.unit = unit
+        # ``users.unit`` is a NOT NULL legacy varchar kept in step with the
+        # authoritative unit_id so the Flask screens and reports agree.
+        user.unit_legacy = unit.name
+        user.authority = roles.BASE_CREATOR
+        user.save(update_fields=["unit", "unit_legacy", "authority"])
+
+        log_action(
+            actor=user,
+            action="change_unit",
+            entity_type="profile",
+            entity_id=user.id,
+            before={
+                "unit_id": previous_unit_id,
+                "unit_acronym": previous_unit.acronym if previous_unit else "",
+                "authority": previous_authority,
+                "ended_appointments": ended_posts,
+                "ended_sections": ended_sections,
+                "revoked_acting": revoked_acting,
+            },
+            after={
+                "unit_id": unit.id,
+                "unit_acronym": unit.acronym,
+                "authority": roles.BASE_CREATOR,
+                "appointments": [],
+            },
+            request=request,
+        )
+
+    return {
+        "from_unit_id": previous_unit_id,
+        "unit_id": unit.id,
+        "unit_acronym": unit.acronym,
+        "authority": roles.BASE_CREATOR,
+        "ended_appointments": ended_posts,
+        "ended_sections": ended_sections,
+        "revoked_acting": revoked_acting,
+    }
+
+
 class ProfileView(APIView):
     """``GET`` the caller's profile, ``PATCH`` the fields they may change."""
 
@@ -238,7 +340,7 @@ class ProfileView(APIView):
                     "detail": (
                         "These fields cannot be changed through the profile: "
                         + ", ".join(rejected)
-                        + ". Contact an administrator for role or unit changes."
+                        + ". Contact an administrator for role changes."
                     )
                 }
             )
@@ -257,6 +359,39 @@ class ProfileView(APIView):
 
         user = request.user
         profile = _profile_for(user)
+
+        # Moving unit: allowed, but it ends what the person held where they were
+        # and leaves them with no post in the new one.
+        unit_change: dict | None = None
+        if UNIT_TRANSFER_FIELD in request.data:
+            from apps.legacy.models import Unit
+
+            raw = request.data.get(UNIT_TRANSFER_FIELD)
+            if raw in (None, "", "null"):
+                raise ValidationError(
+                    {UNIT_TRANSFER_FIELD: "Choose the unit you are joining."}
+                )
+            try:
+                new_unit_id = int(raw)
+            except (TypeError, ValueError):
+                raise ValidationError({UNIT_TRANSFER_FIELD: "Choose a valid unit."})
+            target_unit = Unit.objects.filter(pk=new_unit_id, is_active=True).first()
+            if target_unit is None:
+                raise ValidationError(
+                    {UNIT_TRANSFER_FIELD: "That unit is not active."}
+                )
+            if target_unit.id != user.unit_id:
+                if ownership.is_system_owner(user):
+                    raise ValidationError(
+                        {
+                            UNIT_TRANSFER_FIELD: (
+                                "The Super Administrator's unit is changed by another "
+                                "administrator, after handing the seat over."
+                            )
+                        }
+                    )
+                unit_change = change_unit(user, target_unit, request=request)
+
         before = {
             "contact_number": user.contact_number or "",
             "bio": profile.bio or "",
@@ -316,7 +451,10 @@ class ProfileView(APIView):
             after=diff,
             request=request,
         )
-        return Response(profile_payload(user))
+        payload = profile_payload(user)
+        if unit_change:
+            payload["unit_change"] = unit_change
+        return Response(payload)
 
 
 class PreferencesView(APIView):

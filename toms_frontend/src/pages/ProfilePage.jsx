@@ -19,9 +19,10 @@ import { useApi } from "../hooks/useApi.js";
 /**
  * Self-service profile (spec §3).
  *
- * Only the fields the backend declares editable are rendered as inputs. Role,
- * unit and status are displayed read-only: the API rejects any attempt to
- * change them, so the UI does not pretend otherwise.
+ * Only the fields the backend declares editable are rendered as inputs. Role and
+ * status stay read-only. Unit is editable, but changing it is destructive and is
+ * confirmed first: the server ends every post held in the unit being left and
+ * leaves the account with the Creator role only in the new one.
  */
 const PROFILE_DETAIL_FIELDS = [
   "email",
@@ -62,6 +63,7 @@ const EDUCATION_OPTIONS = [
 
 function blankProfileForm(data) {
   const form = {
+    unit_id: data?.unit_id ? String(data.unit_id) : "",
     contact_number: data?.contact_number || "",
     bio: data?.bio || "",
   };
@@ -73,6 +75,10 @@ export default function ProfilePage() {
   const { refresh, permissions } = useAuth();
   const navigate = useNavigate();
   const { data, loading, error, reload, setData } = useApi("/auth/profile/");
+  // The unit register is readable by every authenticated account, so the move
+  // picker needs no extra permission.
+  const unitsApi = useApi("/units/?is_active=true&page_size=200");
+  const unitOptions = unitsApi.data?.results ?? [];
 
   const [form, setForm] = useState(blankProfileForm(null));
   const [fieldErrors, setFieldErrors] = useState({});
@@ -101,33 +107,62 @@ export default function ProfilePage() {
 
   async function saveProfile(event) {
     event.preventDefault();
-    setBusy(true);
     setActionError("");
     setFieldErrors({});
     setNotice("");
+
+    // Send only what actually changed. Legacy records can hold values such as
+    // "N/A" in contact_number; re-submitting them unchanged would fail
+    // validation even though the user edited something else.
+    const payload = {};
+    if (form.contact_number !== (data.contact_number || "")) {
+      payload.contact_number = form.contact_number;
+    }
+    if (form.bio !== (data.bio || "")) payload.bio = form.bio;
+    for (const field of PROFILE_DETAIL_FIELDS) {
+      if (form[field] !== (data[field] || "")) {
+        payload[field] = PROFILE_DATE_FIELDS.includes(field)
+          ? form[field] || null
+          : form[field];
+      }
+    }
+
+    // A unit move ends what the person held and cannot be undone from this
+    // page, so it is confirmed before anything is saved.
+    const unitChanged =
+      form.unit_id && String(form.unit_id) !== String(data.unit_id ?? "");
+    if (unitChanged) {
+      const target = unitOptions.find((row) => String(row.id) === String(form.unit_id));
+      const label = target ? `${target.acronym} - ${target.name}` : "the selected unit";
+      const confirmed = window.confirm(
+        `Move to ${label}?\n\n` +
+          "Every post you hold in your current unit will be ended, including office " +
+          "and section assignments and any acting authority.\n\n" +
+          "In the new unit you will hold no post: only the Creator role. An " +
+          "administrator there must appoint you again."
+      );
+      if (!confirmed) return;
+      payload.unit_id = Number(form.unit_id);
+    }
+
+    if (!Object.keys(payload).length) {
+      setNotice("No changes to save.");
+      return;
+    }
+
+    setBusy(true);
     try {
-      // Send only what actually changed. Legacy records can hold values such as
-      // "N/A" in contact_number; re-submitting them unchanged would fail
-      // validation even though the user edited something else.
-      const payload = {};
-      if (form.contact_number !== (data.contact_number || "")) {
-        payload.contact_number = form.contact_number;
-      }
-      if (form.bio !== (data.bio || "")) payload.bio = form.bio;
-      for (const field of PROFILE_DETAIL_FIELDS) {
-        if (form[field] !== (data[field] || "")) {
-          payload[field] = PROFILE_DATE_FIELDS.includes(field)
-            ? form[field] || null
-            : form[field];
-        }
-      }
-      if (!Object.keys(payload).length) {
-        setNotice("No changes to save.");
-        return;
-      }
       const updated = await api.patch("/auth/profile/", payload);
       setData(updated);
-      setNotice("Profile updated.");
+      if (unitChanged) {
+        setNotice(
+          "Unit changed. Your posts in the previous unit were ended and you hold the " +
+            "Creator role only."
+        );
+        refresh();
+      } else {
+        setNotice("Profile updated.");
+      }
     } catch (err) {
       setFieldErrors(err.fieldErrors || {});
       setActionError(err.message);
@@ -211,8 +246,8 @@ export default function ProfilePage() {
         <div>
           <h1>My Profile</h1>
           <p>
-            Update your own contact details, picture and signature. Role, unit and permissions are
-            managed by an administrator.
+            Update your own contact details, picture, signature and unit. Role and
+            permissions are managed by an administrator.
           </p>
         </div>
         {/* The Super Administrator's role is red so the seat is recognisable
@@ -320,6 +355,24 @@ export default function ProfilePage() {
           <Card title="Editable details">
             <form onSubmit={saveProfile}>
               <div className="form-grid">
+                <Field
+                  label="Unit"
+                  className="span-2"
+                  error={fieldErrors.unit_id}
+                  hint="Moving to another unit ends every post you hold in your current unit, including office/section assignments, and leaves you with the Creator role only in the new one."
+                >
+                  <Select
+                    value={form.unit_id}
+                    onChange={(event) => setForm({ ...form, unit_id: event.target.value })}
+                  >
+                    <option value="">Select unit…</option>
+                    {unitOptions.map((row) => (
+                      <option key={row.id} value={String(row.id)}>
+                        {row.acronym} - {row.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
                 <Field
                   label="Contact number"
                   error={fieldErrors.contact_number}

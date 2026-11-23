@@ -12,7 +12,7 @@ from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.accounts.models import UserProfile
-from apps.core.factories import make_user
+from apps.core.factories import make_unit, make_user
 
 pytestmark = pytest.mark.django_db
 
@@ -59,6 +59,7 @@ def test_every_authenticated_user_can_read_their_profile(as_user, creator):
         "afsc_tertiary",
         "highest_education",
         "civil_status",
+        "unit_id",
     ]
     # No credential material of any kind is exposed.
     assert "password_hash" not in body
@@ -83,7 +84,7 @@ def test_user_updates_contact_and_bio(api, login, creator):
     assert creator.contact_number == "+63 917 555 0100"
 
 
-@pytest.mark.parametrize("field", ["authority", "unit_id", "is_active", "username", "serial_number"])
+@pytest.mark.parametrize("field", ["authority", "is_active", "username", "serial_number"])
 def test_profile_cannot_change_role_unit_or_identity(api, login, creator, field):
     login(creator)
     token = csrf_token(api)
@@ -327,6 +328,83 @@ def test_signature_upload_writes_existing_column_and_serves(api, login, creator)
     assert removed.status_code == 200
     creator.refresh_from_db()
     assert not creator.signature_filename
+
+
+def test_moving_unit_ends_posts_and_leaves_creator_only(api, login, creator, other_unit):
+    """A unit move ends the old unit's posts and grants nothing in the new one."""
+    from apps.command.models import OfficeSection, SectionAssignment, UnitAppointment
+
+    creator.authority = "Unit Safety Officer"
+    creator.save(update_fields=["authority"])
+    post = UnitAppointment.objects.create(
+        unit=creator.unit, user=creator, role="safety_officer"
+    )
+    office = OfficeSection.objects.create(
+        unit=creator.unit, name="Safety Office", code="A7"
+    )
+    assignment = SectionAssignment.objects.create(
+        user=creator, section=office, assignment_type="primary"
+    )
+
+    login(creator)
+    token = csrf_token(api)
+    response = api.patch(
+        "/api/auth/profile/",
+        {"unit_id": other_unit.id},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 200, response.content
+    body = response.json()
+    assert body["unit_id"] == other_unit.id
+    assert body["unit_change"]["unit_id"] == other_unit.id
+    # No post is created in the new unit: Creator, and nothing else.
+    assert body["authority"] == "Creator"
+    assert body["appointments"] == []
+    assert body["sections"] == []
+
+    creator.refresh_from_db()
+    assert creator.unit_id == other_unit.id
+    assert creator.unit_legacy == other_unit.name
+    assert creator.authority == "Creator"
+
+    post.refresh_from_db()
+    assert post.is_active is False
+    assert post.ended_at is not None
+    assignment.refresh_from_db()
+    assert assignment.is_active is False
+
+
+def test_moving_to_the_same_unit_changes_nothing(api, login, creator):
+    login(creator)
+    token = csrf_token(api)
+    response = api.patch(
+        "/api/auth/profile/",
+        {"unit_id": creator.unit_id},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 200, response.content
+    assert "unit_change" not in response.json()
+
+
+def test_super_administrator_cannot_move_itself(api, login, seat_admin):
+    """The seat holder must hand over first: a self-move would demote it."""
+    login(seat_admin)
+    token = csrf_token(api)
+    elsewhere = make_unit(name="Charlie Squadron", acronym="CHARLIE")
+    response = api.patch(
+        "/api/auth/profile/",
+        {"unit_id": elsewhere.id},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert "Super Administrator" in str(body["errors"]["unit_id"]), body
+
+    seat_admin.refresh_from_db()
+    assert seat_admin.authority == "Administrator"
 
 
 def test_profile_requires_authentication(api):
