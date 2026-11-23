@@ -329,8 +329,25 @@ export function Modal({ title, onClose, children, footer, wide = false }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Closing on a click outside only counts when the press also started
+  // outside: a click that begins inside the dialog and lands on the backdrop
+  // (a layout shift, a dragged text selection) must not throw the form away.
+  const pressedBackdrop = useRef(false);
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={(event) => {
+        pressedBackdrop.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        const outside = pressedBackdrop.current;
+        pressedBackdrop.current = false;
+        if (outside && event.target === event.currentTarget) onClose?.();
+      }}
+    >
       <div
         className={`modal ${wide ? "modal-wide" : ""}`}
         onClick={(event) => event.stopPropagation()}
@@ -428,8 +445,10 @@ export function StatusBadge({ status }) {
     draft: "muted",
     planned: "info",
     approved: "success",
-    active: "success",
-    in_progress: "info",
+    // A running mission, vehicle run or trip is in progress, not finished:
+    // yellow distinguishes it from an approved plan (green).
+    active: "warning",
+    in_progress: "warning",
     completed: "success",
     cancelled: "danger",
     submitted: "info",
@@ -478,12 +497,13 @@ export function EmptyState({ message }) {
   return <div className="state state-empty">{message}</div>;
 }
 
-export function Stat({ label, value, hint, tone }) {
+export function Stat({ label, value, hint, tone, children }) {
   return (
     <div className={`stat ${tone ? `stat-${tone}` : ""}`}>
       <span className="stat-label">{label}</span>
       <span className="stat-value">{value ?? "—"}</span>
       {hint && <span className="stat-hint">{hint}</span>}
+      {children}
     </div>
   );
 }

@@ -186,6 +186,20 @@ class InventoryPermission(BasePermission):
         return can(request.user, roles.CAP_MANAGE_INVENTORY)
 
 
+class CanRecordAirFuel(BasePermission):
+    """The POL-01 an airframe burned, recorded by Logistics.
+
+    The Logistics Officer and the Logistic NCOIC record the figure; the
+    Operations Center plans the sortie but only reads the consumption. The
+    caller still reaches only the missions their queryset allows.
+    """
+
+    def has_permission(self, request, view):
+        return is_authenticated(request) and can(
+            request.user, roles.CAP_RECORD_AIR_FUEL
+        )
+
+
 class CanManageVehicles(BasePermission):
     """The vehicle register belongs to the Logistics Officer.
 

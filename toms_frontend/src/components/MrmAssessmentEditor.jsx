@@ -25,6 +25,8 @@ import {
  */
 
 const SEVERITY_WEIGHT = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+//: A saved assessment must identify at least this many hazards.
+const MIN_HAZARDS = 8;
 //: The unit's risk matrix, verbatim. A rating outside these three lists is not
 //: classified, so it is shown grey rather than passed off as acceptable.
 const RED = new Set(["5A", "5B", "5C", "4A", "4B", "3A"]);
@@ -161,6 +163,30 @@ export default function MrmAssessmentEditor({ mrmId, onSaved, onStateChange }) {
     const totalPercent = (maxRisk ? residual / maxRisk : 0) * 100;
     return { maxRisk, residual, totalPercent };
   }, [model?.hazards]);
+
+  const imsafeItems = model?.options?.imsafe ?? [];
+  const uncheckedImsafe = imsafeItems.filter(
+    (item) => !model?.imsafe?.[item.key]
+  );
+  const missingHazards = Math.max(
+    0,
+    MIN_HAZARDS - (model?.hazards?.length ?? 0)
+  );
+  const readyToSave = !uncheckedImsafe.length && !missingHazards;
+  const requirementNotes = [];
+  if (missingHazards) {
+    requirementNotes.push(
+      `Select at least ${MIN_HAZARDS} hazards (${missingHazards} more to go).`
+    );
+  }
+  if (uncheckedImsafe.length) {
+    requirementNotes.push(
+      `Check every I'M SAFE item (${uncheckedImsafe
+        .map((item) => `${item.key} — ${item.title}`)
+        .join(", ")}).`
+    );
+  }
+  const requirementText = requirementNotes.join(" ");
 
   if (details.loading && !model) return <p className="hint">Loading the assessment…</p>;
   if (details.error) return <ErrorBanner message={details.error} onRetry={details.reload} />;
@@ -307,6 +333,11 @@ export default function MrmAssessmentEditor({ mrmId, onSaved, onStateChange }) {
   }
 
   async function save() {
+    if (!readyToSave) {
+      setNotice("");
+      setError(requirementText);
+      return;
+    }
     setBusy(true);
     setError("");
     setNotice("");
@@ -465,6 +496,9 @@ export default function MrmAssessmentEditor({ mrmId, onSaved, onStateChange }) {
         </div>
 
         <h3 style={{ marginTop: 14 }}>Crew — I&apos;M SAFE</h3>
+        <p className="hint" style={{ marginTop: 0 }}>
+          All six checks must be ticked before the assessment can be saved.
+        </p>
         <div className="form-grid">
           {model.options.imsafe.map((item) => (
             <label key={item.key} className="badge badge-muted" style={{ cursor: "pointer" }}>
@@ -506,7 +540,9 @@ export default function MrmAssessmentEditor({ mrmId, onSaved, onStateChange }) {
         <p className="hint" style={{ marginTop: 0 }}>
           The rating beside a hazard is its after-mitigation rating, computed from the likelihood and
           severity you set: <strong>green</strong> acceptable, <strong>amber</strong> tolerable,{" "}
-          <strong>red</strong> unacceptable. It changes with the selects below.
+          <strong>red</strong> unacceptable. It changes with the selects below. At least{" "}
+          <strong>{MIN_HAZARDS}</strong> hazards must be selected before the assessment can be
+          saved.
         </p>
 
         {model.hazards.length === 0 ? (
@@ -641,11 +677,18 @@ export default function MrmAssessmentEditor({ mrmId, onSaved, onStateChange }) {
       </Card>
 
       <ErrorBanner message={error} />
+      {editable && !readyToSave && (
+        <p className="field-message">{requirementText}</p>
+      )}
       {notice && <div className="alert alert-success">{notice}</div>}
 
       <div className="btn-row" style={{ marginBottom: 18 }}>
         {editable && (
-          <Button onClick={save} disabled={busy}>
+          <Button
+            onClick={save}
+            disabled={busy || !readyToSave}
+            title={requirementText || undefined}
+          >
             {busy ? "Saving…" : "Save changes"}
           </Button>
         )}

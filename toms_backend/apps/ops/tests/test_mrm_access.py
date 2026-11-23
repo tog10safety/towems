@@ -215,6 +215,18 @@ def test_date_covered_falls_back_to_the_raised_date_for_legacy_rows(
     assert mrm_form.id in {row["id"] for row in response.json()["results"]}
 
 
+def test_a_manual_mrm_covers_the_day_it_was_raised(as_user, creator, mrm_form):
+    """With no mission window, the assessment covers the day it was raised."""
+    mrm_form.date_created = dt.datetime(2026, 2, 1, 9, 0)
+    mrm_form.save(update_fields=["date_created"])
+
+    rows = as_user(creator).get("/api/risk-register/").json()["results"]
+    row = next(row for row in rows if row["id"] == mrm_form.id)
+
+    assert row["date_covered_start"] == row["date_covered_end"]
+    assert row["date_covered_start"].startswith("2026-02-01T09:00")
+
+
 # ---------------------------------------------------------------------------
 # Deletion
 # ---------------------------------------------------------------------------

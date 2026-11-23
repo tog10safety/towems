@@ -3,6 +3,7 @@ import L from "leaflet";
 import {
   CircleMarker,
   MapContainer,
+  Marker,
   Polygon,
   Popup,
   useMap,
@@ -27,6 +28,12 @@ import MapBasemapLayer from "../components/map/MapBasemapLayer.jsx";
 import MapLayersPanel from "../components/map/MapLayersPanel.jsx";
 import { AdminBoundariesLayer, BoundaryPreview } from "../components/map/Boundaries.jsx";
 import UnitMarkerLayer from "../components/map/UnitMarkerLayer.jsx";
+import {
+  FuelGlyph,
+  FuelPopup,
+  fuelMarker,
+  groupFuelPlaces,
+} from "../map/fuel.jsx";
 import ManageAORModal from "./ManageAORModal.jsx";
 import AORViewer from "./AORViewer.jsx";
 import { useApi } from "../hooks/useApi.js";
@@ -62,6 +69,11 @@ export default function AORPage() {
   // Roll-up totals only: subordinate coverage counts towards its mother unit in
   // the listing, without drawing a second polygon on the map.
   const coverage = useApi("/aor/coverage/", { enabled: isAdmin });
+  // Fuel pins come from the same scoped operational picture the viewer reads,
+  // so both AOR pages draw the same aviation-fuel stores, in the same places.
+  const fuelPicture = useApi("/gis/operational-picture/?layers=fuel", {
+    enabled: isAdmin,
+  });
 
   const canManage = Boolean(permissions.manage_aor);
   // The unit's Operations Center may tidy up an existing AOR (rename, recolour,
@@ -101,8 +113,16 @@ export default function AORPage() {
     return stored.includes("units") ? stored : [...stored, "units"];
   });
   const [basemapFailure, setBasemapFailure] = useState("");
+  // Like every other AOR layer, the fuel pins start off: the map opens on the
+  // unit picture and the operator asks for stores.
+  const [showFuel, setShowFuel] = useState(false);
 
   const aors = data?.results ?? [];
+  const fuelPositions = fuelPicture.data?.fuel_positions ?? [];
+  const fuelPlaces = useMemo(
+    () => groupFuelPlaces(fuelPositions),
+    [fuelPositions]
+  );
   const polygons = useMemo(
     () =>
       aors
@@ -434,6 +454,29 @@ export default function AORPage() {
             </p>
           </CollapsibleCard>
 
+          <CollapsibleCard title="Fuel locations" summary={showFuel ? "Shown" : "Hidden"}>
+            <label className="legend-toggle">
+              <input
+                type="checkbox"
+                checked={showFuel}
+                onChange={(event) => setShowFuel(event.target.checked)}
+              />
+              <span className="legend-icon" style={{ color: "#d97706" }}>
+                <FuelGlyph />
+              </span>
+              <span>Fuel Locations</span>
+              <span className="hint">({fuelPlaces.length})</span>
+            </label>
+            <p className="hint" style={{ marginTop: 8 }}>
+              POL-01 aviation fuel (Jet A1 and AVGas) inside your unit scope. Drums
+              are counted in drums and bulk stock in litres; an empty batch is not
+              drawn.
+            </p>
+            {fuelPicture.error && (
+              <p className="hint">Fuel locations could not be loaded.</p>
+            )}
+          </CollapsibleCard>
+
           <CollapsibleCard title="Legend" summary="Map symbols">
             <ul className="map-legend">
               <li>
@@ -444,6 +487,20 @@ export default function AORPage() {
               </li>
               <li>
                 <span className="legend-line" data-kind="preview" /> Selected area
+              </li>
+              <li>
+                <label className="legend-toggle">
+                  <input
+                    type="checkbox"
+                    checked={showFuel}
+                    onChange={(event) => setShowFuel(event.target.checked)}
+                  />
+                  <span className="legend-icon" style={{ color: "#d97706" }}>
+                    <FuelGlyph />
+                  </span>
+                  <span>Fuel Locations</span>
+                  <span className="hint">({fuelPlaces.length})</span>
+                </label>
               </li>
               <li>
                 <span className="legend-dot" /> Picked point
@@ -642,6 +699,24 @@ export default function AORPage() {
             {activeLayers.includes("units") && (
               <UnitMarkerLayer units={unitPins.data?.results ?? []} />
             )}
+
+            {showFuel &&
+              fuelPlaces.map((place) => (
+                <Marker
+                  key={`fuel-${place.key}`}
+                  position={[Number(place.latitude), Number(place.longitude)]}
+                  icon={fuelMarker(place)}
+                  zIndexOffset={300000}
+                >
+                  <Popup
+                    className="pol-popup"
+                    maxWidth={360}
+                    minWidth={240}
+                  >
+                    <FuelPopup place={place} />
+                  </Popup>
+                </Marker>
+              ))}
 
             {activeLayers.includes("aor") &&
               polygons.map((polygon) => (

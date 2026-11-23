@@ -35,6 +35,7 @@ export default function UserManagementPage() {
   const { user, permissions } = useAuth();
   const [search, setSearch] = useState("");
   const [authority, setAuthority] = useState("");
+  const [setup, setSetup] = useState("");
   const [status, setStatus] = useState("");
   const [unit, setUnit] = useState("");
   const [page, setPage] = useState(1);
@@ -51,13 +52,14 @@ export default function UserManagementPage() {
   const path = `/admin/users/${qs({
     search,
     authority,
+    setup,
     is_active: status,
     unit,
     page,
     page_size: PAGE_SIZE,
   })}`;
   const { data, loading, error: loadError, reload } = useApi(path, {
-    deps: [search, authority, status, unit, page],
+    deps: [search, authority, setup, status, unit, page],
     enabled: Boolean(permissions.manage_users),
   });
   const units = useApi("/units/?is_active=true&page_size=200", {
@@ -141,6 +143,14 @@ export default function UserManagementPage() {
     setError("");
     setResetResult(null);
     setDialog({ type: "reset", user: row });
+  }
+
+  function openMfaReset(row) {
+    setNotice("");
+    setError("");
+    setReason("");
+    setResetResult(null);
+    setDialog({ type: "mfa-reset", user: row });
   }
 
   async function saveEdit() {
@@ -239,6 +249,23 @@ export default function UserManagementPage() {
     }
   }
 
+  async function resetMfa() {
+    setBusy(true);
+    setError("");
+    try {
+      await api.post(`/admin/users/${dialog.user.id}/reset-mfa/`, { reason });
+      setNotice(
+        `MFA enrolment reset for @${dialog.user.username}. A new 14-day enrolment window has started.`
+      );
+      closeDialog();
+      reload();
+    } catch (err) {
+      setError(err.fieldErrors?.reason || err.fieldErrors?.detail || err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function copyLink() {
     const absolute = `${window.location.origin}${resetResult.reset_url}`;
     try {
@@ -276,6 +303,19 @@ export default function UserManagementPage() {
             }}
           />
           <div className="inline-row">
+            <Select
+              value={setup}
+              onChange={(event) => {
+                setSetup(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Filter by outstanding account setup"
+            >
+              <option value="">All setup states</option>
+              <option value="outstanding">Setup outstanding</option>
+              <option value="profile">Profile refresh due</option>
+              <option value="mfa">Authenticator not enrolled</option>
+            </Select>
             <Select
               value={authority}
               onChange={(event) => {
@@ -343,6 +383,23 @@ export default function UserManagementPage() {
                 },
                 { key: "unit_acronym", label: "Unit", render: (row) => row.unit_acronym || "—" },
                 {
+                  key: "email",
+                  label: "Gmail",
+                  render: (row) =>
+                    row.email ? (
+                      <span>
+                        {row.email}
+                        {row.mfa_account && row.mfa_account !== row.email && (
+                          <span className="hint" style={{ display: "block" }}>
+                            Enrolled as {row.mfa_account}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="hint">Not recorded</span>
+                    ),
+                },
+                {
                   key: "roles",
                   label: "Roles",
                   render: (row) => (
@@ -386,6 +443,57 @@ export default function UserManagementPage() {
                     ),
                 },
                 {
+                  key: "setup",
+                  label: "Setup",
+                  render: (row) => {
+                    const badges = [];
+                    if (row.profile_refresh_required) {
+                      badges.push(
+                        <Badge key="profile" tone="warning">
+                          Profile refresh
+                        </Badge>
+                      );
+                    }
+                    if (row.mfa_outstanding) {
+                      badges.push(
+                        <Badge key="mfa" tone="warning">
+                          Authenticator
+                        </Badge>
+                      );
+                    }
+                    if (badges.length) {
+                      return (
+                        <span>
+                          <span className="badge-stack">{badges}</span>
+                          {row.profile_refresh_required &&
+                            (row.profile_setup_gap_labels ?? []).length > 0 && (
+                              <span className="hint" style={{ display: "block" }}>
+                                {row.profile_setup_gap_labels.join(" · ")}
+                              </span>
+                            )}
+                        </span>
+                      );
+                    }
+                    return row.mfa_enabled ? (
+                      <Badge tone="success">Complete</Badge>
+                    ) : (
+                      <span className="hint">Awaiting rollout</span>
+                    );
+                  },
+                },
+                {
+                  key: "mfa",
+                  label: "MFA",
+                  render: (row) =>
+                    row.mfa_enabled ? (
+                      <Badge tone="success">Enabled</Badge>
+                    ) : row.mfa_required ? (
+                      <Badge tone="warning">Not enrolled</Badge>
+                    ) : (
+                      <span className="hint">Not required</span>
+                    ),
+                },
+                {
                   key: "actions",
                   label: "Actions",
                   render: (row) => (
@@ -399,6 +507,11 @@ export default function UserManagementPage() {
                       <Button size="sm" variant="ghost" onClick={() => openReset(row)}>
                         Reset password
                       </Button>
+                      {row.mfa_required && (
+                        <Button size="sm" variant="ghost" onClick={() => openMfaReset(row)}>
+                          Reset MFA
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant={row.is_active ? "danger" : "ghost"}
@@ -438,6 +551,8 @@ export default function UserManagementPage() {
                 ? `Roles & appointments · @${dialog.user.username}`
                 : dialog.type === "reset"
                   ? `Reset password · @${dialog.user.username}`
+                  : dialog.type === "mfa-reset"
+                    ? `Reset MFA · @${dialog.user.username}`
                   : `${dialog.type === "deactivate" ? "Deactivate" : "Reactivate"} @${dialog.user.username}`
           }
           onClose={closeDialog}
@@ -463,6 +578,11 @@ export default function UserManagementPage() {
               {dialog.type === "reset" && !resetResult && (
                 <Button onClick={issueReset} disabled={busy || !dialog.user.is_active}>
                   {busy ? "Issuing…" : "Issue reset link"}
+                </Button>
+              )}
+              {dialog.type === "mfa-reset" && (
+                <Button variant="danger" onClick={resetMfa} disabled={busy || !reason.trim()}>
+                  {busy ? "Resetting…" : "Reset MFA enrolment"}
                 </Button>
               )}
             </>
@@ -759,6 +879,31 @@ export default function UserManagementPage() {
                   This account is inactive. Reactivate it before issuing a reset.
                 </div>
               )}
+            </>
+          )}
+
+          {dialog.type === "mfa-reset" && (
+            <>
+              <p className="hint">
+                This clears the account&apos;s authenticator secret and recovery codes, and starts
+                a new 14-day enrolment window. The account can sign in during that window but must
+                enrol before it ends. The reset is recorded in the audit trail with your username
+                and the reason below.
+              </p>
+              {dialog.user.mfa_enabled && (
+                <div className="alert alert-warning">
+                  The current authenticator and all unused recovery codes will stop working
+                  immediately.
+                </div>
+              )}
+              <Field label="Reason" required hint="Recorded in the audit trail.">
+                <Textarea
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  rows={3}
+                  placeholder="Why is this account's MFA enrolment being reset?"
+                />
+              </Field>
             </>
           )}
 

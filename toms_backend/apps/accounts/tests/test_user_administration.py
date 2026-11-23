@@ -23,6 +23,42 @@ def test_only_administrators_reach_user_management(as_user, creator, admin, eval
     assert response.json()["count"] >= 2
 
 
+def test_setup_filter_lists_accounts_that_still_owe_a_step(
+    as_user, admin, creator, evaluator
+):
+    from apps.accounts.models import UserProfile
+
+    profile, _created = UserProfile.objects.get_or_create(user=creator)
+    profile.onboarding_required = True
+    profile.onboarding_completed_at = None
+    profile.avatar_filename = ""
+    profile.email = ""
+    profile.save()
+    creator.signature_filename = None
+    creator.force_password_change = True
+    creator.save(update_fields=["signature_filename", "force_password_change"])
+
+    response = as_user(admin).get("/api/admin/users/?setup=outstanding")
+    assert response.status_code == 200, response.content
+    rows = response.json()["results"]
+    usernames = [row["username"] for row in rows]
+    assert creator.username in usernames
+    assert evaluator.username not in usernames
+
+    row = next(item for item in rows if item["username"] == creator.username)
+    assert row["profile_refresh_required"] is True
+    assert set(row["profile_setup_gaps"]) == {"password", "picture", "signature", "email"}
+    assert "Upload your signature" in row["profile_setup_gap_labels"]
+    assert row["mfa_outstanding"] is True
+    assert row["email"] == ""
+    assert row["mfa_account"] == ""
+
+    profile_only = as_user(admin).get("/api/admin/users/?setup=profile")
+    assert [item["username"] for item in profile_only.json()["results"]] == [
+        creator.username
+    ]
+
+
 def test_account_payload_never_contains_a_password(as_user, admin, creator):
     response = as_user(admin).get(f"/api/admin/users/?search={creator.username}")
     assert response.status_code == 200

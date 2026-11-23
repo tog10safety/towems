@@ -33,6 +33,24 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (username, password) => {
     await ensureCsrf();
     const me = await api.post("/auth/login/", { username, password });
+    // A password for an enrolled account returns a challenge, not a session.
+    // Only a real challenge leaves ``user`` unset; an unenrolled account gets
+    // a session plus the setup flags the shell redirects on.
+    if (me?.challenge) return me;
+    setUser(me);
+    setError("");
+    return me;
+  }, []);
+
+  const verifyMfa = useCallback(async (challenge, code, recovery = false) => {
+    const me = await api.post("/auth/mfa/challenge/", { challenge, code, recovery });
+    setUser(me);
+    setError("");
+    return me;
+  }, []);
+
+  const verifyMfaSetup = useCallback(async (code) => {
+    const me = await api.post("/auth/mfa/setup/verify/", { code });
     setUser(me);
     setError("");
     return me;
@@ -53,11 +71,13 @@ export function AuthProvider({ children }) {
       loading,
       error,
       login,
+      verifyMfa,
+      verifyMfaSetup,
       logout,
       refresh,
       permissions: user?.permissions ?? {},
     }),
-    [user, loading, error, login, logout, refresh]
+    [user, loading, error, login, verifyMfa, verifyMfaSetup, logout, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

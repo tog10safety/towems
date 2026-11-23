@@ -248,14 +248,18 @@ gunicorn toms.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 60
 
 ## 5. Production migration procedure (REQUIRES YOUR APPROVAL)
 
-This is the only step that writes DDL to production. The migration is **purely additive**:
-15 domain tables (`ops_*`, `core_audit_log`) plus Django's own `django_*`/`auth_*` bookkeeping
-tables. The UI/MRM/user-administration phase adds one column on the TOWEMS-owned
-`accounts_user_profile` table (`theme_preference`) and two TOWEMS tables
+This is the only step that writes DDL to production. The migration is **purely additive to the
+legacy schema**: 15 domain tables (`ops_*`, `core_audit_log`) plus Django's own
+`django_*`/`auth_*` bookkeeping tables. The UI/MRM/user-administration phase adds one column on
+the TOWEMS-owned `accounts_user_profile` table (`theme_preference`) and two TOWEMS tables
 (`accounts_password_reset_token`, `ops_mission_risk_team`). The AOR/GIS phase adds one TOWEMS
 table (`ops_administrative_area`), one nullable column (`ops_area_of_responsibility.admin_area`)
-and one partial unique index. There is no `ALTER`, `DROP` or `RENAME` on any legacy object and
-no legacy row is rewritten.
+and one partial unique index. The MFA phase adds `accounts_user_mfa` (with its `account` column)
+and `accounts_mfa_recovery_code`, and `command/0011` drops two TOWEMS-owned tables that no model
+references any more (`command_unit_echelon`, `command_role_assignment_request`). There is no `ALTER`, `DROP` or
+`RENAME` on any **legacy** object and no legacy row is rewritten.
+
+Run the steps **in this order**; each one is a gate for the next.
 
 ```bash
 # 0. Drift check — production schema must still match docs/database_schema.json
@@ -263,7 +267,8 @@ python tools/introspect_schema.py            # then diff with docs/database_sche
 
 # 1. Fresh, verified backup (section 2)
 
-# 2. Plan — read it. Expect only CreateModel/AddField/CreateModel for new tables.
+# 2. Plan — read it. Expect CreateModel/AddField for TOWEMS tables, plus the reviewed
+#    command/0011 drops of two TOWEMS-owned tables. No legacy object appears.
 DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.prod \
   python toms_backend/manage.py migrate --plan
 
@@ -290,27 +295,106 @@ DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.pr
 Expect `1730 created, 0 updated, 0 unchanged, 0 skipped`. A non-zero `skipped` count means the
 bundled dataset is damaged — stop and re-run `tools/build_admin_boundaries.py` before deploying.
 
+```bash
+# 6. First-login rollout: force every active account through the profile refresh
+DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.prod \
+  python toms_backend/manage.py require_profile_refresh --dry-run   # counts only
+DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.prod \
+  python toms_backend/manage.py require_profile_refresh
+```
+
+Expect `Profile refresh required for N account profile(s), N password change(s) forced of N
+active account(s).`, where N is the active account count (484 at the audit baseline). This is a
+**data** step, not DDL: it sets `accounts_user_profile.onboarding_required` and the existing
+`users.force_password_change`, and never touches an unmanaged table's schema. Run it **before**
+nginx starts serving TOWEMS, so the very first request already meets the gate.
+Do not run it earlier against production while Flask is still serving users: Flask would ignore
+the flags, and people would be greeted by the profile refresh whenever the switch happens.
+
+### 5.1 What every user meets on their first sign-in (Gmail + Google Authenticator)
+
+The rollout is two server-enforced gates, in this order; neither can be skipped by a hand-made
+request.
+
+**Gate 1 — profile refresh.** Until all four items are present the session can only reach
+`/auth/profile/`, `/auth/password/`, `/auth/onboarding/`, `/auth/me/`, `/auth/mfa/` and sign-out:
+
+1. a **new password** (the old one is still valid for signing in; `force_password_change` is set);
+2. a **profile picture**;
+3. a **signature** (the same column the MRM PDF generator reads);
+4. the **Gmail account** they will use — it must end with `@gmail.com`
+   (`PROFILE_EMAIL_SUFFIX` in `toms/settings/base.py`).
+
+`POST /auth/onboarding/complete/` refuses to clear the prompt while any item is missing.
+
+**Gate 2 — Google Authenticator.** The instant the profile is complete the session is held to
+`/auth/mfa/` until a TOTP code is confirmed. Deployment policy
+`MFA_REQUIRED_FOR_ALL_ACCOUNTS = True` in `toms/settings/base.py` applies this to **every active
+account**, not only Administrators and Commanders. Enrolment is keyed to the profile's Gmail address
+(the authenticator entry reads `TOWEMS (name@gmail.com)`), and setup is refused outright if that
+address is missing, so the enforcement is on the account, not on whatever the browser sends.
+A confirmed enrolment returns **10 one-time recovery codes**; the person must store them.
+
+Accounts that were already enrolled keep their existing TOTP secret and continue to be
+challenged normally; only newly created entries carry the Gmail label.
+
+**API tokens.** `/auth/token/` refuses to issue a JWT while either gate is open
+(`403` with `profile_setup_required` or `mfa_setup_required`), because token clients never pass
+through the session middleware. The smoke test therefore has to run as a **fully set-up
+account** — profile complete and authenticator enrolled — not as a freshly flagged one.
+
+**Chasing people afterwards.** User Management (`/admin/users`) has a **Setup** column
+(`Profile refresh` / `Authenticator`) and a filter: *Setup outstanding*, *Profile refresh due*,
+*Authenticator not enrolled*. The **Gmail** column shows the profile address and prints
+`Enrolled as …` when the address actually enrolled differs — the typo / wrong-account case.
+`Reset MFA` on a row clears the secret, its account label and its recovery codes; the person
+re-enrols with their Gmail on next sign-in.
+
+**Releasing the gate (exception path).** `require_profile_refresh --clear` stops asking accounts
+that have not signed in yet; it does **not** restore old passwords, so anyone who already changed
+theirs keeps the new one. Use it only for a deliberate deferral, not to unblock one person — for
+an individual, reset their password through User Management instead.
+
 ## 6. Cutover checklist
 
 1. [ ] Backup taken **and restore-tested**.
 2. [ ] Schema drift diff is empty.
 3. [ ] `migrate --plan` reviewed and approved by you.
-4. [ ] Migration applied to production; `verify_legacy_mapping` passes.
-5. [ ] Django + gunicorn up on the internal port; `curl /api/health/` returns 200.
-6. [ ] nginx serves the built SPA; deep links (`/risk/1`) resolve to `index.html`.
-7. [ ] Smoke checks on the real host: login with an existing account (Werkzeug hash path),
+4. [ ] `migrate` applied; `verify_legacy_mapping` reports zero mismatches and the 11 legacy row
+       counts are identical to the pre-migration snapshot.
+5. [ ] `import_admin_boundaries` run (`1730 created, 0 skipped`).
+6. [ ] `require_profile_refresh --dry-run` count matches the active account count, then the real
+       run executed — **before** nginx starts serving TOWEMS.
+7. [ ] Django + gunicorn up on the internal port; `curl /api/health/` returns 200 (users still on
+       Flask).
+8. [ ] First-login gate rehearsed on the real host with a throw-away account: profile form blocks
+       the rest of the app, the four steps clear it, Google Authenticator enrolment follows
+       immediately, the entry shows the Gmail address, and recovery codes are returned.
+9. [ ] nginx switched: SPA served, `/api/` proxied to gunicorn, deep links (`/risk/1`) resolve to
+       `index.html`.
+10.[ ] Smoke checks on the real host as a fully set-up account (the token route is gated):
+       login with an existing account (Werkzeug hash path),
        dashboard counts match legacy numbers, risk list shows the same 292 MRMs,
        create/edit one draft, MGRS conversion, CSV export.
-7a.[ ] GIS: `/api/map/config/` lists the configured basemaps, AOR / GIS page renders the
+10a.[ ] GIS: `/api/map/config/` lists the configured basemaps, AOR / GIS page renders the
        province layer, and `POST /api/aor/assign/` as a non-Administrator returns 403.
-8. [ ] Old Flask app still running and reachable on its previous port (fallback).
-9. [ ] Monitor logs for 24–48 h before decommissioning anything.
+10b.[ ] User Management → *Setup outstanding* lists the accounts still to chase; the Gmail column
+       matches the address each person enrolled.
+11.[ ] Old Flask app still running and reachable on its previous port (fallback).
+12.[ ] Monitor logs for 24–48 h before decommissioning anything.
 
 ## 7. Rollback
 
 **Level 1 — application rollback (minutes, no data loss).** Point nginx back at the Flask
 app (or revert the proxy config). Django's additive tables are inert and harmless to Flask;
 no schema change needs undoing. Flask still runs against the same database unchanged.
+
+**First-login flags after a rollback.** Flask ignores `onboarding_required`,
+`force_password_change` and the MFA tables, so everyone can keep using the old app with the
+passwords they already set. If you return to Flask for more than a few days, release the queue
+with `manage.py require_profile_refresh --clear`; it stops asking accounts that have not signed
+in yet and does not restore old passwords. Users who already enrolled keep their authenticator
+entry — nothing has to be undone for them.
 
 **AOR data note.** AOR rows created from administrative boundaries store their own geometry, so
 reverting the code leaves them fully usable as ordinary AOR polygons; `ops_administrative_area`

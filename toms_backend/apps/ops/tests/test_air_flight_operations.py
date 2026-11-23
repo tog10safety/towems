@@ -456,6 +456,7 @@ def test_actual_takeoff_and_landing_are_additive(as_user, planner, unit):
         page.get_text() for page in fitz.open(stream=actual_pdf.content, filetype="pdf")
     )
     assert "ATD" in actual_text and "ATA" in actual_text
+    assert "SE" in actual_text and "SD" in actual_text
     assert "0605" in actual_text and "0737" in actual_text
 
 
@@ -716,3 +717,145 @@ def test_air_eta_estimate_reports_legs_without_mgrs(as_user, planner):
     assert leg["distance_km"] is None
     assert leg["duration_minutes"] is None
     assert "MGRS" in leg["reason"]
+
+
+def test_engine_times_bracket_a_leg_and_stop_at_an_overflight_target(
+    as_user, planner, unit
+):
+    """SE precedes takeoff, SD follows landing, and neither happens overhead."""
+    payload = flight_operations_payload(unit)
+    payload["air_detail"] = {
+        "operation_date": "2099-11-12",
+        "elements": [
+            {
+                "mission": "Overflight then recovery.",
+                "aircraft": [
+                    {
+                        "aircraft_type": "S-70i BH",
+                        "tail_number": "762",
+                        "is_lead": True,
+                        "crew": [{"role": "PIC", "name": "MARASIGAN"}],
+                        "itineraries": [
+                            {
+                                "etd": "2099-11-12T06:00:00",
+                                "eta": "2099-11-12T07:00:00",
+                                "origin": "LC",
+                                "destination": "LC",
+                                "route": "LC – Over target – LC",
+                                "overflight": True,
+                            },
+                            {
+                                "etd": "2099-11-12T07:30:00",
+                                "eta": "2099-11-12T08:30:00",
+                                "origin": "LC",
+                                "destination": "LC",
+                                "route": "LC – LC",
+                                "overflight": False,
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    client = as_user(planner)
+    created = client.post("/api/missions/", payload, format="json")
+    assert created.status_code == 201, created.content
+    mission = created.json()
+    first, second = mission["air_detail"]["elements"][0]["aircraft"][0][
+        "itineraries"
+    ]
+
+    def record(leg, body):
+        return client.post(
+            f"/api/missions/{mission['id']}/itineraries/{leg['id']}/actual/",
+            body,
+            format="json",
+        )
+
+    def leg_after(response, leg):
+        for element in response.json()["air_detail"]["elements"]:
+            for aircraft in element["aircraft"]:
+                for row in aircraft["itineraries"]:
+                    if row["id"] == leg["id"]:
+                        return row
+        raise AssertionError("the leg is missing from the response")
+
+    # A shutdown needs a landing first, and an overflight leg never lands.
+    early_shutdown = record(second, {"event": "sd", "at": "2099-11-12T08:05:00"})
+    assert early_shutdown.status_code == 400
+    assert "record ata before sd" in str(early_shutdown.json()).lower()
+
+    started = record(first, {"event": "se", "at": "2099-11-12T05:55:00"})
+    assert started.status_code == 200, started.content
+    assert leg_after(started, first)["se"] is not None
+
+    takeoff = record(first, {"event": "takeoff", "at": "2099-11-12T06:00:00"})
+    assert takeoff.status_code == 200, takeoff.content
+
+    late_start = record(first, {"event": "se", "at": "2099-11-12T06:10:00"})
+    assert late_start.status_code == 400
+    assert "must not follow atd" in str(late_start.json()).lower()
+
+    over_shutdown = record(first, {"event": "sd", "at": "2099-11-12T06:45:00"})
+    assert over_shutdown.status_code == 400
+    assert "records tot" in str(over_shutdown.json()).lower()
+
+    tot = record(first, {"event": "tot", "at": "2099-11-12T06:30:00"})
+    assert tot.status_code == 200, tot.content
+    toot = record(first, {"event": "toot", "at": "2099-11-12T07:00:00"})
+    assert toot.status_code == 200, toot.content
+
+    # Departing the target is a continuation, not a new start.
+    restart = record(second, {"event": "se", "at": "2099-11-12T07:05:00"})
+    assert restart.status_code == 400
+    assert "no engine start" in str(restart.json()).lower()
+
+    landed = record(second, {"event": "landing", "at": "2099-11-12T08:00:00"})
+    assert landed.status_code == 200, landed.content
+    landed_mission = landed.json()
+    assert landed_mission["status"] == "completed"
+
+    # The landing closed the mission, but the engines are still running.
+    before_landing = record(second, {"event": "sd", "at": "2099-11-12T07:50:00"})
+    assert before_landing.status_code == 400
+    assert "must not precede ata" in str(before_landing.json()).lower()
+
+    stopped = record(second, {"event": "sd", "at": "2099-11-12T08:05:00"})
+    assert stopped.status_code == 200, stopped.content
+    assert stopped.json()["status"] == "completed"
+    assert leg_after(stopped, second)["sd"] is not None
+    assert leg_after(stopped, first)["se"] is not None
+
+
+def test_actual_sheet_blanks_engine_times_where_they_cannot_exist():
+    """SE/SD print for a landing leg; the target end of an overflight has none."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from apps.ops.flight_operations_pdf import _actual_time_cells
+
+    def leg(**overrides):
+        values = {
+            "se": None,
+            "atd": None,
+            "ata": None,
+            "sd": None,
+            "overflight": False,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    at = lambda hour, minute: datetime(2099, 11, 11, hour, minute)  # noqa: E731
+
+    departs = leg(se=at(6, 0), atd=at(6, 5), ata=at(7, 30), sd=at(7, 35))
+    assert _actual_time_cells(departs, None) == ["0600", "0605", "0730", "0735"]
+
+    # Over the target: ATD to TOT, and no shutdown.
+    over = leg(atd=at(8, 0), overflight=True)
+    assert _actual_time_cells(over, departs) == ["—", "0800", "—", ""]
+
+    # Departing the target: no engine start, landing and shutdown on return.
+    returning = leg(ata=at(9, 30), sd=at(9, 35))
+    assert _actual_time_cells(returning, over) == ["", "—", "0930", "0935"]

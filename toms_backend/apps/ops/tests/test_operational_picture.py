@@ -285,3 +285,194 @@ def test_unrelated_unit_missions_are_excluded(as_user, creator, unit, mission):
     )
     body = as_user(creator).get("/api/gis/operational-picture/").json()
     assert [row["mission_number"] for row in body["missions"]] == ["MSN-MAP-1"]
+
+
+def test_the_fuel_layer_pins_scoped_pol_stock(as_user, creator, unit, other_unit):
+    """Fuel pins come from the register, inside the map's own scope."""
+    from apps.ops.models import InventoryCategory, InventoryItem
+
+    aviation = InventoryCategory.objects.get(code="POL-01")
+    drums = InventoryItem.objects.create(
+        category=aviation,
+        name="Jet A1 drums",
+        unit=unit,
+        quantity_total=12,
+        unit_of_measure="drum",
+        fuel_grade="jet_a1",
+        fuel_form="drum",
+        drum_capacity_litres=200,
+        quantity_available=9,
+        location_latitude=14.6,
+        location_longitude=120.98,
+        storage_location="Forward POL point",
+    )
+    # Nothing left in it: not a place on the map.
+    InventoryItem.objects.create(
+        category=aviation,
+        name="Empty AVGas drums",
+        unit=unit,
+        quantity_total=0,
+        quantity_available=0,
+        unit_of_measure="drum",
+        fuel_grade="avgas",
+        fuel_form="drum",
+        drum_capacity_litres=200,
+        location_latitude=14.61,
+        location_longitude=120.99,
+    )
+    # Stock with nowhere to sit: counted, not invented onto the map.
+    InventoryItem.objects.create(
+        category=aviation,
+        name="Diesel drums",
+        unit=unit,
+        quantity_total=4,
+        quantity_available=4,
+        unit_of_measure="drum",
+        fuel_form="drum",
+        drum_capacity_litres=200,
+    )
+    # Non-aviation POL stock: real fuel, but not a "fuel location" on the
+    # flight picture, so it is neither drawn nor reported as unplaced.
+    automotive = InventoryCategory.objects.get(code="POL-02")
+    InventoryItem.objects.create(
+        category=automotive,
+        name="Diesel bulk tank",
+        unit=unit,
+        quantity_total=5000,
+        quantity_available=5000,
+        unit_of_measure="litre",
+        fuel_grade="diesel",
+        fuel_form="bulk",
+        location_latitude=14.62,
+        location_longitude=121.0,
+    )
+
+    response = as_user(creator).get("/api/gis/operational-picture/?layers=fuel")
+    assert response.status_code == 200, response.content
+    body = response.json()
+
+    assert [row["id"] for row in body["fuel_positions"]] == [drums.id]
+    row = body["fuel_positions"][0]
+    assert row["form"] == "drum"
+    assert row["quantity_available"] == 9
+    assert row["latitude"] == 14.6 and row["longitude"] == 120.98
+    assert row["position_source"] == "stored"
+    assert body["fuel_without_position"] == 1
+    assert body["counts"]["fuel_positions"] == 1
+    # The diesel tank holds thousands of litres at its own point and is still
+    # absent: this layer is aviation fuel only.
+    assert all(row["name"] != "Diesel bulk tank" for row in body["fuel_positions"])
+
+    denied = as_user(creator).get(
+        f"/api/gis/operational-picture/?layers=fuel&unit={other_unit.id}"
+    )
+    assert denied.status_code == 403
+
+
+def test_mobility_layer_draws_the_fleet_and_never_a_pov(
+    as_user, creator, unit
+):
+    """The mobility layer is the unit's establishment, not personal cars."""
+    from apps.command.models import VehiclePosition
+    from apps.ops.models import Vehicle
+
+    fleet = Vehicle.objects.create(
+        registration_number="KM450-001",
+        vehicle_type="KM450",
+        unit=unit,
+        status="available",
+    )
+    pov = Vehicle.objects.create(
+        registration_number="POV-0009",
+        vehicle_type="Car",
+        unit=unit,
+        status="available",
+        is_pov=True,
+    )
+    for vehicle in (fleet, pov):
+        VehiclePosition.objects.create(
+            vehicle=vehicle,
+            latitude=8.95,
+            longitude=125.48,
+            reported_at=timezone.now(),
+            source="manual",
+        )
+
+    body = as_user(creator).get("/api/gis/operational-picture/?layers=vehicles").json()
+
+    drawn = {row["registration_number"] for row in body["vehicle_positions"]}
+    assert drawn == {"KM450-001"}
+    assert all(
+        row["vehicle_id"] != pov.id for row in body["vehicle_positions"]
+    )
+    # A POV is not a mobility asset at all, so it cannot inflate the "without a
+    # position" count either.
+    assert body["vehicles_without_position"] == 0
+    assert body["counts"]["vehicle_positions"] == 1
+
+
+def test_operations_center_sees_every_boundary_but_stays_scoped_for_data(
+    as_user, creator, unit, other_unit
+):
+    """An Ops Center reads the whole area map; its data layers stay its own."""
+    from apps.command.models import (
+        OfficeSection,
+        SectionAssignment,
+        UnitMapMarker,
+        VehiclePosition,
+    )
+    from apps.core.factories import make_user
+    from apps.ops.models import Vehicle
+
+    office = OfficeSection.objects.create(
+        unit=unit,
+        name="Operations Center",
+        code="OPSCTR",
+        kind="office",
+        function=OfficeSection.FUNCTION_OPERATIONS_CENTER,
+    )
+    member = make_user(unit=unit, authority="Creator")
+    SectionAssignment.objects.create(
+        user=member, section=office, assignment_type="primary"
+    )
+
+    for holder, code in ((unit, "AOR-OWN"), (other_unit, "AOR-NEAR")):
+        AreaOfResponsibility.objects.create(
+            unit=holder,
+            name=f"{code} area",
+            code=code,
+            geometry={"type": "Polygon", "coordinates": [POLYGON]},
+        )
+        UnitMapMarker.objects.create(unit=holder, latitude=14.55, longitude=120.95)
+
+    mine = Vehicle.objects.create(
+        registration_number="KM450-OWN", vehicle_type="KM450", unit=unit
+    )
+    theirs = Vehicle.objects.create(
+        registration_number="KM450-FAR", vehicle_type="KM450", unit=other_unit
+    )
+    for vehicle, longitude in ((mine, 120.95), (theirs, 121.10)):
+        VehiclePosition.objects.create(
+            vehicle=vehicle,
+            latitude=14.55,
+            longitude=longitude,
+            reported_at=timezone.now(),
+            source="manual",
+        )
+
+    body = as_user(member).get(
+        "/api/gis/operational-picture/?layers=aor,units,vehicles"
+    ).json()
+
+    # Boundaries and seals of every unit, with the centre's own scope intact.
+    assert {row["code"] for row in body["aors"]} == {"AOR-OWN", "AOR-NEAR"}
+    assert {"ALPHA", "BRAVO"} <= {row["unit_acronym"] for row in body["units"]}
+    assert body["scope"]["unit_ids"] == [unit.id]
+    # Another unit's vehicle is still not the centre's to watch.
+    assert [row["registration_number"] for row in body["vehicle_positions"]] == [
+        "KM450-OWN"
+    ]
+
+    # A plain account keeps the scoped picture.
+    scoped = as_user(creator).get("/api/gis/operational-picture/?layers=aor").json()
+    assert {row["code"] for row in scoped["aors"]} == {"AOR-OWN"}

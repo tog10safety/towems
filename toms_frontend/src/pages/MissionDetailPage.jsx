@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext.jsx";
 import MrmTeamPicker from "../components/MrmTeamPicker.jsx";
 import PdfViewer from "../components/PdfViewer.jsx";
 import AirFlightOperationsView from "../components/AirFlightOperationsView.jsx";
+import AirFuelDialog from "../components/AirFuelDialog.jsx";
 import {
   Badge,
   Button,
@@ -39,6 +40,8 @@ export default function MissionDetailPage() {
   const { user, permissions } = useAuth();
   const { data, loading, error, reload } = useApi(`/missions/${id}/`, { deps: [id] });
   const canPlan = Boolean(permissions?.can_plan_missions);
+  // Only the Logistics post records the POL-01 figure.
+  const canRecordFuel = Boolean(permissions?.can_record_air_fuel);
   // The eligible approvers, scoped by the server to this mission's unit. Only
   // the planner sees the picker, so only the planner needs the roster.
   const eligibility = useApi(`/missions/${id}/approving-authorities/`, {
@@ -97,6 +100,7 @@ export default function MissionDetailPage() {
   const [routingError, setRoutingError] = useState("");
   const [resubmitting, setResubmitting] = useState(false);
   const [resubmitError, setResubmitError] = useState("");
+  const [fuelOpen, setFuelOpen] = useState(false);
 
   if (loading && !data) return <Loading label="Loading mission…" />;
   if (error) return <ErrorBanner message={error} onRetry={reload} />;
@@ -598,6 +602,13 @@ export default function MissionDetailPage() {
         </div>
       </div>
 
+      {fuelOpen && (
+        <AirFuelDialog
+          mission={data}
+          onClose={() => setFuelOpen(false)}
+          onSaved={() => reload()}
+        />
+      )}
       <ErrorBanner message={actionError} />
       {notice && <div className="alert alert-success">{notice}</div>}
       {isGround && location.state?.missionUpdated && approval.status === "returned" && (
@@ -645,6 +656,86 @@ export default function MissionDetailPage() {
               />
             </div>
           </section>
+
+          {data.category === "air" && (
+            <Card title="Fuel" defaultOpen>
+              <div className="mission-fuel-head">
+                <p className="hint">
+                  POL-01 the crew confirmed at engine shutdown. Drums leave the
+                  store in whole drums; a bulk tank in whole litres.
+                </p>
+                {canRecordFuel && (
+                  <Button size="sm" onClick={() => setFuelOpen(true)}>
+                    Record fuel
+                  </Button>
+                )}
+              </div>
+              {(data.air_fuel?.draws || []).length ? (
+                <div className="table-wrap">
+                  <table className="data-table mission-fuel-table">
+                    <thead>
+                      <tr>
+                        <th>Aircraft</th>
+                        <th>Leg</th>
+                        <th>Drawn</th>
+                        <th>Litres</th>
+                        <th>Store</th>
+                        <th>State</th>
+                        <th>Recorded by</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(data.air_fuel.draws || []).map((draw) => (
+                        <tr key={draw.id}>
+                          <td>{draw.aircraft_label}</td>
+                          <td>
+                            {draw.leg_number ? `L${draw.leg_number}` : "—"}
+                          </td>
+                          <td>
+                            {draw.no_consumption
+                              ? "No fuel"
+                              : `${draw.quantity} ${
+                                  draw.source === "bulk" ? "L" : "drums"
+                                }`}
+                          </td>
+                          <td>
+                            {draw.no_consumption
+                              ? "—"
+                              : `${Math.round(draw.litres)} L`}
+                          </td>
+                          <td>
+                            {draw.item_name || "—"}
+                            {draw.note ? (
+                              <span className="hint"> · {draw.note}</span>
+                            ) : null}
+                          </td>
+                          <td>{draw.state_label}</td>
+                          <td>{draw.recorded_by_name || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="hint">No fuel figure has been recorded yet.</p>
+              )}
+              {(data.air_fuel?.outstanding || []).length ? (
+                <p className="field-message">
+                  Fuel not recorded for:{" "}
+                  {data.air_fuel.outstanding
+                    .map((row) =>
+                      row.leg_number
+                        ? `${row.label} (L${row.leg_number})`
+                        : row.label
+                    )
+                    .join(", ")}
+                </p>
+              ) : null}
+              <p className="hint">
+                Total recorded: {Math.round(data.air_fuel?.total_litres || 0)} L
+              </p>
+            </Card>
+          )}
         </div>
 
         <div className="mission-view-side">

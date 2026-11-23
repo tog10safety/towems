@@ -113,6 +113,37 @@ def test_the_operations_center_starts_one_run_per_vehicle(as_user, planner, trac
     assert vehicle.status == "on_trip"
 
 
+def test_the_driver_run_carries_the_road_route_and_stop_positions(
+    as_user, planner, tracked_mission
+):
+    mission, trip, _vehicle, _origin, _destination = tracked_mission
+    trip.route_status = "calculated"
+    trip.route_geometry = {
+        "type": "LineString",
+        "coordinates": [[121.0622, 14.6091], [121.13, 14.68], [121.2, 14.75]],
+    }
+    trip.route_distance_m = 21000
+    trip.route_duration_s = 1800
+    trip.save(
+        update_fields=[
+            "route_status",
+            "route_geometry",
+            "route_distance_m",
+            "route_duration_s",
+        ]
+    )
+
+    body = start(as_user(planner), mission)
+    run = body["runs"][0]
+
+    # The driver's map draws the road route that belongs to their own run, and
+    # every mappable stop carries its position.
+    assert run["route"]["status"] == "calculated"
+    assert len(run["route"]["geometry"]["coordinates"]) == 3
+    assert run["route"]["distance_m"] == 21000
+    assert all(stop["latitude"] is not None for stop in run["stops"])
+
+
 def test_starting_tracking_notifies_the_driver(as_user, planner, driver, tracked_mission):
     mission, *_ = tracked_mission
 
@@ -438,3 +469,69 @@ def test_the_server_stamps_pings_when_the_phone_sends_no_time(
     assert response.status_code == 200, response.content
     run.refresh_from_db()
     assert run.last_ping_at >= before
+
+
+def test_force_closing_a_mission_frees_the_cancelled_run_vehicle(
+    as_user, planner, tracked_mission
+):
+    """A closed mission must not leave a truck "on trip" with nothing running."""
+    mission, trip, vehicle, _origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+    vehicle.refresh_from_db()
+    assert vehicle.status == "on_trip"
+
+    response = as_user(planner).post(
+        f"/api/missions/{mission.id}/tracking/complete/",
+        {"force": True, "note": "Closed with the truck still out."},
+        format="json",
+    )
+    assert response.status_code == 200, response.content
+
+    vehicle.refresh_from_db()
+    trip.refresh_from_db()
+    assert vehicle.status == "available"
+    assert trip.status == "completed"
+
+
+def test_deleting_a_trip_frees_its_vehicle(as_user, planner, tracked_mission):
+    """Removing a running trip must put its truck back in the register."""
+    mission, trip, vehicle, _origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+    vehicle.refresh_from_db()
+    assert vehicle.status == "on_trip"
+
+    response = as_user(planner).delete(f"/api/trips/{trip.id}/")
+
+    assert response.status_code == 204, response.content
+    assert not VehicleTrip.objects.filter(pk=trip.id).exists()
+    vehicle.refresh_from_db()
+    assert vehicle.status == "available"
+
+
+def test_cancelling_a_mission_closes_its_trip_and_frees_the_truck(
+    as_user, planner, tracked_mission
+):
+    """A cancelled mission can take no actual times, so nothing stays running."""
+    mission, trip, vehicle, _origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+
+    response = as_user(planner).post(
+        f"/api/missions/{mission.id}/cancel/",
+        {"reason": "Plan dropped."},
+        format="json",
+    )
+    assert response.status_code == 200, response.content
+
+    mission.refresh_from_db()
+    trip.refresh_from_db()
+    vehicle.refresh_from_db()
+    run = VehicleRun.objects.get(trip=trip)
+
+    assert mission.status == "cancelled"
+    assert trip.status == "cancelled"
+    assert run.status == "cancelled"
+    assert vehicle.status == "available"
+    # The cancellation is evidence, not a silent status flip.
+    assert MovementEvent.objects.filter(
+        run=run, kind=MovementEvent.KIND_CANCEL
+    ).exists()

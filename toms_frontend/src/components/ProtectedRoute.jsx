@@ -22,9 +22,19 @@ export default function ProtectedRoute({
   if (!user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
-  // Newly registered personnel finish password, picture and signature setup
-  // on their profile before they reach the rest of the application.
-  if (user.onboarding_required && location.pathname !== "/profile") {
+  // A session that has finished its profile but not its authenticator is a
+  // setup-only session. Send it straight to the one page the API permits.
+  if (user.mfa_setup_required && location.pathname !== "/mfa-setup") {
+    return <Navigate to="/mfa-setup" replace />;
+  }
+  // Every account refreshes its password, picture, signature and Google
+  // (Gmail) address on first sign-in before reaching the rest of TOWEMS.
+  // Google Authenticator enrolment follows immediately after.
+  if (
+    (user.profile_setup_required || user.onboarding_required) &&
+    location.pathname !== "/profile" &&
+    location.pathname !== "/mfa-setup"
+  ) {
     return <Navigate to="/profile?onboarding=1" replace />;
   }
   // Administrator-only modules stay off every other account even when the URL

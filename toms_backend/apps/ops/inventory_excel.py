@@ -20,6 +20,7 @@ asset tag is reported as a row error instead.
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from io import BytesIO
 
@@ -32,6 +33,14 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from apps.core import roles
 from apps.core.scoping import accessible_unit_ids
 from apps.legacy.models import Unit
+from apps.ops.fuel import (
+    fuel_form_labels,
+    fuel_form_lookup,
+    fuel_grade_labels,
+    fuel_grade_lookup,
+    validate_fuel,
+    validate_pol_dates,
+)
 from apps.ops.models import InventoryCategory, InventoryItem, InventoryTransaction
 
 SHEET_TITLE = "Inventory"
@@ -53,6 +62,17 @@ COLUMNS = [
     ("unit", "Unit"),
     ("storage_location", "Storage Location"),
     ("notes", "Notes"),
+    # The fuel columns sit last so a workbook made before they existed still
+    # lines up: they are optional for materiel and needed only for Jet A1.
+    ("fuel_grade", "Fuel Grade"),
+    ("fuel_form", "Fuel Form"),
+    ("drum_capacity_litres", "Litres per Drum"),
+    # The batch dates of POL stock: issue and expiry for every POL category,
+    # testing only for aviation fuel. Blank for everything else.
+    ("date_issued", "Date Issued"),
+    ("testing_date", "Testing Date"),
+    ("expiry_date", "Expiry Date"),
+    ("da_number", "DA Number"),
 ]
 
 HEADER_ALIASES = {
@@ -82,6 +102,29 @@ HEADER_ALIASES = {
     "location": "storage_location",
     "notes": "notes",
     "remarks": "notes",
+    "fuel grade": "fuel_grade",
+    "grade": "fuel_grade",
+    "fuel": "fuel_grade",
+    "fuel form": "fuel_form",
+    "held as": "fuel_form",
+    "packaging": "fuel_form",
+    "litres per drum": "drum_capacity_litres",
+    "liters per drum": "drum_capacity_litres",
+    "drum capacity": "drum_capacity_litres",
+    "litres per drum l": "drum_capacity_litres",
+    "date issued": "date_issued",
+    "issued": "date_issued",
+    "issue date": "date_issued",
+    "testing date": "testing_date",
+    "test date": "testing_date",
+    "date tested": "testing_date",
+    "expiry date": "expiry_date",
+    "expiration date": "expiry_date",
+    "expires": "expiry_date",
+    "da number": "da_number",
+    "da": "da_number",
+    "delivery advice": "da_number",
+    "delivery advice number": "da_number",
 }
 
 #: Headers a workbook must carry. Everything else has a documented default, so
@@ -101,6 +144,7 @@ UNIT_OF_MEASURE_VALUES = (
     "roll",
     "round",
     "magazine",
+    "drum",
     "litre",
     "gallon",
     "kilogram",
@@ -181,8 +225,12 @@ def category_label(category: InventoryCategory) -> str:
     return f"{category.code} - {category.name}"
 
 
-def categories_for_template() -> list[InventoryCategory]:
-    return list(InventoryCategory.objects.all().order_by("kind", "name"))
+def categories_for_template(kinds=None) -> list[InventoryCategory]:
+    """The categories a template offers; a section tab narrows them to its own."""
+    queryset = InventoryCategory.objects.all()
+    if kinds:
+        queryset = queryset.filter(kind__in=kinds)
+    return list(queryset.order_by("kind", "name"))
 
 
 def units_for_template(user) -> list[Unit]:
@@ -221,11 +269,14 @@ def _column_widths(sheet) -> None:
         "J": 26,
         "K": 30,
         "L": 32,
+        "M": 16,
+        "N": 24,
+        "O": 18,
     }.items():
         sheet.column_dimensions[column].width = width
 
 
-def _lists_sheet(workbook, categories, units, uom) -> dict[str, str]:
+def _lists_sheet(workbook, categories, units, uom, classes=None) -> dict[str, str]:
     """The picker source sheet.
 
     Excel rejects an inline list longer than 255 characters, and the category
@@ -234,14 +285,24 @@ def _lists_sheet(workbook, categories, units, uom) -> dict[str, str]:
     """
     sheet = workbook.create_sheet("Lists")
     columns = [
-        ("Asset Class", class_labels(), 30),
+        ("Asset Class", classes or class_labels(), 30),
         ("Category", [category_label(row) for row in categories], 44),
         ("Condition", condition_labels(), 20),
         ("Unit of Measure", list(uom), 18),
         ("Unit", [unit.name for unit in units], 40),
+        ("Fuel Grade", fuel_grade_labels(), 18),
+        ("Fuel Form", fuel_form_labels(), 26),
     ]
     ranges: dict[str, str] = {}
-    keys = ("kind", "category", "serviceability", "unit_of_measure", "unit")
+    keys = (
+        "kind",
+        "category",
+        "serviceability",
+        "unit_of_measure",
+        "unit",
+        "fuel_grade",
+        "fuel_form",
+    )
     for index, (title, values, width) in enumerate(columns, start=1):
         letter = get_column_letter(index)
         sheet.column_dimensions[letter].width = width
@@ -262,6 +323,19 @@ def _add_pickers(sheet, ranges: dict[str, str], *, rows: int = 1000) -> None:
         "unit_of_measure": ("H", "Unit of measure", "Pick how this item is counted (unit, rounds, litres…)."),
         "serviceability": ("I", "Condition", "Pick the item's condition."),
         "unit": ("J", "Unit", "Pick the holding unit from the dropdown."),
+        "fuel_grade": (
+            "M",
+            "Fuel grade",
+            (
+                "POL-01 Aviation Fuel is AVGas or Jet A1; POL-02 Automotive Fuel "
+                "is Diesel or Gasoline. Leave it blank for every other category."
+            ),
+        ),
+        "fuel_form": (
+            "N",
+            "Fuel form",
+            "Drums are counted as drums; a bulk tank is counted in litres.",
+        ),
     }
     for field, (letter, title, prompt) in targets.items():
         reference = ranges.get(field)
@@ -299,17 +373,27 @@ def _add_pickers(sheet, ranges: dict[str, str], *, rows: int = 1000) -> None:
         quantity.add(f"G{row}")
 
 
-def build_template(user=None) -> bytes:
-    """The workbook an encoder fills in: headers, dropdowns and instructions."""
+def build_template(user=None, kinds=None) -> bytes:
+    """The workbook an encoder fills in: headers, dropdowns and instructions.
+
+    ``kinds`` scopes the pickers to one section of the register (a tab), so a
+    POL template never offers a materiel category and vice versa.
+    """
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = SHEET_TITLE
     _style_header(sheet, COLUMNS)
     _column_widths(sheet)
 
-    categories = categories_for_template()
+    kinds = list(kinds or [])
+    categories = categories_for_template(kinds)
+    classes = (
+        [label for key, label in InventoryCategory.KIND_CHOICES if key in kinds]
+        if kinds
+        else None
+    )
     units = units_for_template(user) if user is not None else []
-    ranges = _lists_sheet(workbook, categories, units, units_of_measure())
+    ranges = _lists_sheet(workbook, categories, units, units_of_measure(), classes)
     _add_pickers(sheet, ranges)
 
     notes = workbook.create_sheet("Instructions")
@@ -324,13 +408,18 @@ def build_template(user=None) -> bytes:
         ("4. Unit of Measure is a dropdown: " + ", ".join(units_of_measure()) + ".", False),
         ("5. Unit is a dropdown of the units you may hold stock for. Leave it blank to use"
          " your own unit.", False),
-        ("6. Quantity is the opening balance. It is written to the ledger as a receipt, so the"
+        ("6. Fuel Grade, Fuel Form and Litres per Drum describe POL stock. Grade applies to"
+         " POL-01 Aviation Fuel (AVGas, Jet A1) and POL-02 Automotive Fuel (Diesel,"
+         " Gasoline) only. Choose Drums (the quantity counts drums and Litres per Drum is"
+         " required) or Bulk tank (the quantity is litres). Leave all three blank for"
+         " anything that is not POL.", False),
+        ("7. Quantity is the opening balance. It is written to the ledger as a receipt, so the"
          " stock balance always reconciles.", False),
-        ("7. Asset Tag must be unique. An item that already exists is edited in the app;"
+        ("8. Asset Tag must be unique. An item that already exists is edited in the app;"
          " importing never overwrites stock on hand.", False),
-        ("8. Every row is validated before anything is saved. A workbook with any invalid row"
+        ("9. Every row is validated before anything is saved. A workbook with any invalid row"
          " imports nothing, so you can fix the reported rows and upload it again.", False),
-        ("9. Import at most 2000 rows and keep the file under 5 MB.", False),
+        ("10. Import at most 2000 rows and keep the file under 5 MB.", False),
     ]
     for index, (text, bold) in enumerate(lines, start=1):
         cell = notes.cell(row=index, column=1, value=text)
@@ -371,6 +460,15 @@ def export_workbook(items, user=None) -> bytes:
             row.unit.name if row.unit_id else "",
             row.storage_location or "",
             row.notes or "",
+            # Fuel cells carry the display labels the pickers offer, so the
+            # workbook a user exports is the one the import accepts back.
+            row.get_fuel_grade_display() if row.fuel_grade else "",
+            row.get_fuel_form_display() if row.fuel_form else "",
+            (row.drum_capacity_litres or "") if row.fuel_form == "drum" else "",
+            row.date_issued.isoformat() if row.date_issued else "",
+            row.testing_date.isoformat() if row.testing_date else "",
+            row.expiry_date.isoformat() if row.expiry_date else "",
+            row.da_number or "",
         ]
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row=index, column=column, value=value)
@@ -509,14 +607,93 @@ def _resolve_quantity(value, errors: dict) -> int:
     return number
 
 
+def _resolve_drum_capacity(value, form: str, errors: dict) -> int | None:
+    """Litres in one drum; never set for a bulk tank or a non-fuel row."""
+    text = _text(value)
+    if form != "drum":
+        if text:
+            errors["drum_capacity_litres"] = (
+                "Litres per drum only applies to a drum row; bulk stock is "
+                "measured in litres."
+            )
+        return None
+    if not text:
+        # The shared fuel rules report the missing capacity once.
+        return None
+    try:
+        number = int(float(text))
+    except (TypeError, ValueError):
+        errors["drum_capacity_litres"] = f"{text!r} is not a whole number of litres."
+        return None
+    if number <= 0:
+        errors["drum_capacity_litres"] = "Litres per drum must be more than zero."
+        return None
+    return number
+
+
+def _resolve_date(value, field: str, errors: dict):
+    """One date cell as a date; blank stays blank."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    text = _text(value)
+    try:
+        return dt.date.fromisoformat(text)
+    except ValueError:
+        errors[field] = f"{text!r} is not a date; use YYYY-MM-DD."
+        return None
+
+
+def _resolve_fuel(grade_value, form_value, capacity_value, category, errors: dict) -> dict:
+    """Read the three POL cells and apply the register's own rules to them."""
+    grade_text = _text(grade_value)
+    form_text = _text(form_value)
+
+    grade = ""
+    if grade_text:
+        grade = fuel_grade_lookup().get(_normalise_key(grade_text), "")
+        if not grade:
+            errors["fuel_grade"] = (
+                f"Unknown fuel grade {grade_text!r}. Choose one of: "
+                + ", ".join(fuel_grade_labels())
+                + "."
+            )
+
+    form = ""
+    if form_text:
+        form = fuel_form_lookup().get(_normalise_key(form_text), "")
+        if not form:
+            errors["fuel_form"] = (
+                f"Unknown fuel form {form_text!r}. Choose one of: "
+                + ", ".join(fuel_form_labels())
+                + "."
+            )
+
+    if errors.get("fuel_grade") or errors.get("fuel_form"):
+        return {"fuel_grade": grade, "fuel_form": form, "drum_capacity_litres": None}
+
+    capacity = _resolve_drum_capacity(capacity_value, form, errors)
+    for field, message in validate_fuel(grade, form, capacity, category).items():
+        errors.setdefault(field, message)
+    return {"fuel_grade": grade, "fuel_form": form, "drum_capacity_litres": capacity}
+
+
 def _require_header(mapping: dict, errors: list[str]) -> None:
     for field in REQUIRED_HEADERS:
         if field not in mapping:
             errors.append(field)
 
 
-def import_workbook(user, upload) -> dict:
-    """Import every row of a template workbook, or none of them."""
+def import_workbook(user, upload, kinds=None) -> dict:
+    """Import every row of a template workbook, or none of them.
+
+    ``kinds`` is the section tab the workbook was uploaded from: a row filed
+    under a category outside that tab is refused, so an import can never add
+    materiel while the officer is working in POL.
+    """
     if not can_manage(user):
         raise InventoryImportError(
             "Only the Logistics Officer or an Administrator may import inventory."
@@ -579,6 +756,11 @@ def import_workbook(user, upload) -> dict:
         row_errors: dict[str, str] = {}
 
         category = _resolve_category(raw.get("category"), row_errors)
+        if kinds and category is not None and category.kind not in kinds:
+            row_errors["category"] = (
+                f"{category_label(category)} belongs to another section of the "
+                "register. Import it from that section's tab."
+            )
         item_name = _text(raw.get("name"))
         if not item_name:
             row_errors["name"] = "Enter the item's name."
@@ -611,6 +793,42 @@ def import_workbook(user, upload) -> dict:
         condition = _resolve_condition(raw.get("serviceability"), row_errors)
         uom = _resolve_uom(raw.get("unit_of_measure"), row_errors)
         quantity = _resolve_quantity(raw.get("quantity_total"), row_errors)
+        fuel = _resolve_fuel(
+            raw.get("fuel_grade"),
+            raw.get("fuel_form"),
+            raw.get("drum_capacity_litres"),
+            category,
+            row_errors,
+        )
+        dates = {
+            "date_issued": _resolve_date(
+                raw.get("date_issued"), "date_issued", row_errors
+            ),
+            "testing_date": _resolve_date(
+                raw.get("testing_date"), "testing_date", row_errors
+            ),
+            "expiry_date": _resolve_date(
+                raw.get("expiry_date"), "expiry_date", row_errors
+            ),
+        }
+        for field, message in validate_pol_dates(dates, category).items():
+            row_errors.setdefault(field, message)
+
+        # A delivery advice belongs to a bulk aviation delivery only.
+        da_number = _text(raw.get("da_number"))
+        if da_number and not (
+            category is not None
+            and category.code == "POL-01"
+            and fuel["fuel_form"] == "bulk"
+        ):
+            row_errors.setdefault(
+                "da_number", "A DA number applies to POL-01 bulk stock only."
+            )
+        # Drums belong at the unit's own POL dump unless the row names a place,
+        # which is the same default the API applies to a drum item.
+        storage_location = _text(raw.get("storage_location"))
+        if fuel["fuel_form"] == "drum" and not storage_location and unit is not None:
+            storage_location = f"{unit.acronym or unit.name} POL Dump"
 
         asset_tag = _text(raw.get("asset_tag"))
         if asset_tag:
@@ -643,8 +861,15 @@ def import_workbook(user, upload) -> dict:
                 "unit_of_measure": uom,
                 "serviceability": condition,
                 "unit": unit,
-                "storage_location": _text(raw.get("storage_location")),
+                "storage_location": storage_location,
                 "notes": _text(raw.get("notes")),
+                "fuel_grade": fuel["fuel_grade"],
+                "fuel_form": fuel["fuel_form"],
+                "drum_capacity_litres": fuel["drum_capacity_litres"],
+                "date_issued": dates["date_issued"],
+                "testing_date": dates["testing_date"],
+                "expiry_date": dates["expiry_date"],
+                "da_number": da_number,
             }
         )
 
@@ -674,6 +899,13 @@ def import_workbook(user, upload) -> dict:
                     serviceability=values["serviceability"],
                     is_sensitive=values["category"].is_sensitive,
                     notes=values["notes"],
+                    fuel_grade=values["fuel_grade"],
+                    fuel_form=values["fuel_form"],
+                    drum_capacity_litres=values["drum_capacity_litres"],
+                    date_issued=values["date_issued"],
+                    testing_date=values["testing_date"],
+                    expiry_date=values["expiry_date"],
+                    da_number=values["da_number"],
                 )
                 for values in prepared
             ]

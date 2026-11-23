@@ -1,8 +1,9 @@
 """Daily Flight Operations sheet.
 
 The planning PDF is a schedule: it prints ETD/ETA. Once the day is flown, the
-same sheet is printed as an actual record: ATD/ATA. Planned and actual times
-are stored separately, so exporting an actual sheet never rewrites the plan.
+same sheet is printed as an actual record: engine start (SE), ATD, ATA and
+engine shutdown (SD). Planned and actual times are stored separately, so
+exporting an actual sheet never rewrites the plan.
 """
 
 from __future__ import annotations
@@ -86,6 +87,23 @@ def _time(value, *, actual: bool) -> str:
     return _text(value)
 
 
+def _actual_time_cells(leg, previous) -> list[str]:
+    """SE/ATD/ATA/SD for one leg, blank where the time cannot exist.
+
+    A leg that starts over an overflight target has no engine start -- the
+    aircraft never shut down -- and an overflight leg has no shutdown -- it flies
+    on over the target -- so those cells stay blank instead of claiming the time
+    is merely unrecorded.
+    """
+    starts_on_ground = not (previous is not None and previous.overflight)
+    return [
+        _time(leg.se, actual=True) if starts_on_ground else "",
+        _time(leg.atd, actual=True),
+        _time(leg.ata, actual=True),
+        "" if leg.overflight else _time(leg.sd, actual=True),
+    ]
+
+
 def _element_rows(element):
     """Return (aircraft label, crew label, legs) rows for one element."""
     aircraft = list(element.aircraft.all())
@@ -152,7 +170,7 @@ def generate_flight_operations_pdf(missions, *, operation_date, mode="schedule")
         Spacer(1, 7),
     ]
 
-    time_headers = ["ATD", "ATA"] if actual else ["ETD"]
+    time_headers = ["SE", "ATD", "ATA", "SD"] if actual else ["ETD"]
     headers = [
         "NR",
         "ACFT TYPE",
@@ -193,29 +211,28 @@ def generate_flight_operations_pdf(missions, *, operation_date, mode="schedule")
                         ]
                     )
                     row_index += 1
+                previous_leg = None
                 for leg in legs:
                     route, mission_text = _leg_text(leg, element)
+                    time_cells = (
+                        _actual_time_cells(leg, previous_leg)
+                        if actual
+                        else [_time(leg.etd, actual=False)]
+                    )
                     data.append(
                         [
                             Paragraph(_text(element.sequence), styles["FlightCell"]),
                             Paragraph(_text(aircraft_label), styles["FlightCell"]),
                             Paragraph(_text(crew_label), styles["FlightCell"]),
                             *[
-                                Paragraph(
-                                    _time(
-                                        getattr(leg, field),
-                                        actual=actual,
-                                    ),
-                                    styles["FlightCell"],
-                                )
-                                for field in (
-                                    ("atd", "ata") if actual else ("etd",)
-                                )
+                                Paragraph(cell, styles["FlightCell"])
+                                for cell in time_cells
                             ],
                             Paragraph(_text(route), styles["FlightCell"]),
                             Paragraph(_text(mission_text), styles["FlightCell"]),
                         ]
                     )
+                    previous_leg = leg
                     row_index += 1
                 if row_index - aircraft_start > 1:
                     spans.append(
@@ -235,8 +252,12 @@ def generate_flight_operations_pdf(missions, *, operation_date, mode="schedule")
             ]
         )
 
-    time_widths = [65, 55] if actual else [65]
-    fixed_widths = [24, 110, 125, *time_widths, 215]
+    if actual:
+        time_widths = [32, 52, 52, 32]
+        fixed_widths = [24, 100, 110, *time_widths, 200]
+    else:
+        time_widths = [65]
+        fixed_widths = [24, 110, 125, *time_widths, 215]
     widths = [
         *fixed_widths,
         CONTENT_WIDTH - sum(fixed_widths),
@@ -259,7 +280,8 @@ def generate_flight_operations_pdf(missions, *, operation_date, mode="schedule")
     story.append(
         Paragraph(
             "Actual times are recorded from the flown legs. "
-            "TBD is used when no planned time was entered; — means the actual time is not recorded.",
+            "TBD is used when no planned time was entered; — means the actual time is not recorded. "
+            "SE/SD are the engine start and shutdown; an overflight leg records neither at the target.",
             styles["FlightSub"],
         )
     )

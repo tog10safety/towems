@@ -37,6 +37,7 @@ from apps.core.permissions import (
     CanPlanOperations,
     CanManageUnits,
     CanManageVehicles,
+    CanRecordAirFuel,
     CanRequestInventory,
     CanRouteMissions,
     CanViewResources,
@@ -266,9 +267,17 @@ def _safety_analytics(user):
     )
 
     mission_scope = Mission.objects.filter(unit_id=unit.id).exclude(status="cancelled")
+    # The safety watch follows the operations tile: air missions carry no MRM,
+    # and a ground mission that has finished is a record, not live work.
+    live_ground_missions = (
+        Mission.objects.filter(unit_id=unit.id, category=Mission.CATEGORY_GROUND)
+        .exclude(status__in=["cancelled", "completed"])
+    )
     without_mrm = sum(
         1
-        for mission in mission_scope.select_related("risk_assessment__mrm_form")
+        for mission in live_ground_missions.select_related(
+            "risk_assessment__mrm_form"
+        )
         if not approvals.mrm_complete(mission)
     )
 
@@ -279,7 +288,25 @@ def _safety_analytics(user):
             "mrm_form_id", flat=True
         )
     )
-    open_mrms = mrm.filter(authority_approved=False)
+    # Neither an air mission's form nor a finished mission's form is a queued
+    # action, so they leave the attention list. A form with no mission at all
+    # is still the unit's live paperwork and stays.
+    inactive_form_ids = set(
+        Mission.objects.filter(
+            Q(category=Mission.CATEGORY_AIR)
+            | Q(status__in=["cancelled", "completed"]),
+            risk_form_id__isnull=False,
+        ).values_list("risk_form_id", flat=True)
+    )
+    inactive_form_ids.update(
+        RiskAssessment.objects.filter(mrm_form_id__isnull=False)
+        .filter(
+            Q(mission__category=Mission.CATEGORY_AIR)
+            | Q(mission__status__in=["cancelled", "completed"])
+        )
+        .values_list("mrm_form_id", flat=True)
+    )
+    open_mrms = mrm.filter(authority_approved=False).exclude(id__in=inactive_form_ids)
 
     def attention_row(row):
         allowed, _ = mrm_access.can_delete(user, row)
@@ -379,11 +406,38 @@ class DashboardView(APIView):
         )
         low_stock = items.filter(quantity_available__lte=5).count()
 
-        vehicles = Vehicle.objects.filter(is_active=True)
+        # The same fleet the Mobility Assets register lists: a personal vehicle
+        # belongs to a person, not the unit's establishment, so counting it here
+        # made the tile disagree with the register it summarises.
+        vehicles = Vehicle.objects.filter(is_active=True, is_pov=False)
         if unit_ids is not None:
             vehicles = vehicles.filter(Q(unit_id__in=unit_ids) | Q(unit_id__isnull=True))
         vehicle_available = vehicles.filter(status="available").count()
         vehicle_on_trip = vehicles.filter(status="on_trip").count()
+        # Which vehicles are out, and on what. A POV is a person's car on a
+        # mission trip; a PAFMV is a unit vehicle from the register counted
+        # above. Naming the difference stops the two being pooled into one
+        # figure the register can never match.
+        trip_scope = VehicleTrip.objects.filter(status="in_progress")
+        if unit_ids is not None:
+            trip_scope = trip_scope.filter(
+                Q(vehicles__vehicle__unit_id__in=unit_ids)
+                | Q(vehicles__vehicle__unit_id__isnull=True)
+            ).distinct()
+        on_trip_details = sorted(
+            [
+                {
+                    "vehicle_id": assignment.vehicle_id,
+                    "registration_number": assignment.vehicle.registration_number,
+                    "kind": "POV" if assignment.vehicle.is_pov else "PAFMV",
+                    "trip_number": trip.trip_number,
+                    "trip_title": trip.title,
+                }
+                for trip in trip_scope.prefetch_related("vehicles__vehicle")
+                for assignment in trip.vehicles.all()
+            ],
+            key=lambda row: (row["kind"], row["registration_number"]),
+        )
 
         trips = VehicleTrip.objects.all()
         trips_in_progress = trips.filter(status="in_progress").count()
@@ -410,7 +464,14 @@ class DashboardView(APIView):
 
         from django.utils import timezone as _tz
 
-        mrm_scope = missions.exclude(status="cancelled")
+        # The Wing monitors MRMs for ground missions only: air missions are
+        # excluded from the MRM requirement, so an air sortie without one is not
+        # a gap. Outstanding risk work is also live work - a completed mission
+        # has flown already, so its missing MRM belongs to the audit trail, not
+        # to the operations watch.
+        mrm_scope = missions.exclude(status__in=["cancelled", "completed"]).filter(
+            category=Mission.CATEGORY_GROUND
+        )
         mrm_missing = mrm_scope.filter(risk_assessment__isnull=True).filter(
             Q(start_at__isnull=False) | Q(status__in=["planned", "approved", "active"])
         ).count()
@@ -420,6 +481,34 @@ class DashboardView(APIView):
         mrm_overdue = mrm_scope.filter(start_at__lt=_tz.now()).exclude(
             risk_assessment__mrm_form__authority_approved=True
         ).count()
+
+        # Operational watch: POL drum batches whose shelf life runs out first,
+        # in the same unit and sensitivity scope as the register above. A batch
+        # already past its date stays listed - it is the most urgent - and only
+        # stock still on hand counts, because an emptied batch is nothing left
+        # to draw down.
+        today = timezone.now().date()
+        watch_horizon = today + dt.timedelta(days=30)
+        expiring = items.filter(
+            category__kind="fuel",
+            fuel_form="drum",
+            expiry_date__isnull=False,
+            expiry_date__lte=watch_horizon,
+            quantity_available__gt=0,
+        ).order_by("expiry_date", "id")
+        expiring_count = expiring.count()
+
+        # The POL figures the dashboard tiles show. Litres are summed with the
+        # model's own conversion, so a drum and a bulk tank are compared in the
+        # unit the Wing actually plans with, and the expiring count is the same
+        # one the watch list below the tiles reports.
+        fuel_items = items.filter(category__kind="fuel")
+        fuel_litres = 0
+        fuel_drums = 0
+        for stock in fuel_items:
+            fuel_litres += stock.litres(stock.quantity_available)
+            if stock.fuel_form == "drum":
+                fuel_drums += int(stock.quantity_available or 0)
 
         unread = Notification.objects.filter(recipient_id=user.id, is_read=False).count()
         pending_actions = Notification.objects.filter(
@@ -461,9 +550,42 @@ class DashboardView(APIView):
                     "low_stock": low_stock,
                     "sensitive_visible": _can_see_sensitive(user),
                 },
-                "vehicles": {"available": vehicle_available, "on_trip": vehicle_on_trip},
+                "fuel": {
+                    "litres_available": fuel_litres,
+                    "drums_available": fuel_drums,
+                    "expiring": expiring_count,
+                },
+                "vehicles": {
+                    "available": vehicle_available,
+                    "on_trip": vehicle_on_trip,
+                    "on_trip_details": on_trip_details,
+                },
                 "trips": {"in_progress": trips_in_progress, "planned": trips_planned},
                 "aor": {"count": aor.count()},
+                # The shelf-life warning the register alone never gave: the
+                # batches an officer must issue, test or extend first.
+                "watch": {
+                    "horizon_days": 30,
+                    "fuel_expiring_count": expiring_count,
+                    "fuel_expiring": [
+                        {
+                            "id": item.id,
+                            "name": item.name,
+                            "grade": (
+                                item.get_fuel_grade_display()
+                                if item.fuel_grade
+                                else item.name
+                            ),
+                            "drums": item.quantity_available,
+                            "litres": item.litres(item.quantity_available),
+                            "location": item.storage_location or "",
+                            "unit": item.unit.acronym if item.unit_id else "",
+                            "expiry_date": item.expiry_date.isoformat(),
+                            "days_left": (item.expiry_date - today).days,
+                        }
+                        for item in expiring[:5]
+                    ],
+                },
                 # Present only for a Unit Safety Officer; scoped to their own unit.
                 "safety": _safety_analytics(user),
                 "notifications": {"unread": unread, "pending_actions": pending_actions},
@@ -931,6 +1053,12 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 "air_detail__assigned_aircraft",
                 "air_detail__elements__aircraft__crew",
                 "air_detail__elements__aircraft__itineraries",
+                # The Fuel card reads these on every mission in the list, so
+                # they load with it instead of once per row.
+                "air_fuel_draws__aircraft",
+                "air_fuel_draws__leg",
+                "air_fuel_draws__item",
+                "air_fuel_draws__recorded_by",
             )
         )
         category = self.request.query_params.get("category")
@@ -1023,6 +1151,10 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
         return serializers.MissionSerializer
 
     def get_permissions(self):
+        if self.action in {"fuel_draws", "fuel_items", "fuel_unrecorded"}:
+            # Fuel is the Logistics register's business: the Logistics Officer
+            # and the Logistic NCOIC record it, and the planners read the result.
+            return [IsAuthenticated(), CanRecordAirFuel()]
         # Only the final decision uses approval authority. Planning, editing,
         # submitting, routing and removing a draft all stay with the Operations
         # Center: command posts observe the mission, they do not change it.
@@ -1201,7 +1333,101 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 "Only the Super Administrator may permanently delete a mission. "
                 "Cancel it instead."
             )
-        super().perform_destroy(instance)
+        from apps.ops import tracking
+
+        # A trip outlives its mission (the link is SET_NULL), so an erased
+        # mission closes its trips and frees their vehicles here. Otherwise
+        # a trip stays "in progress" for ever with no run left to finish it,
+        # and its vehicles never return to the register.
+        with transaction.atomic():
+            tracking.reset_trips_for_mission(instance, actor=self.request.user)
+            super().perform_destroy(instance)
+
+    # -- Aircraft fuel draws ----------------------------------------------
+
+    @action(detail=True, methods=["post"], url_path="fuel-draws")
+    def fuel_draws(self, request, pk=None):
+        """Record the POL-01 an aircraft burned, in drums or bulk litres."""
+        from apps.ops import air_fuel
+
+        mission = self.get_object()
+        draw = air_fuel.record_draw(
+            mission=mission,
+            aircraft_id=request.data.get("aircraft"),
+            leg_id=request.data.get("leg"),
+            source=request.data.get("source"),
+            quantity=request.data.get("quantity"),
+            item_id=request.data.get("item"),
+            note=request.data.get("note") or "",
+            allow_pending=bool(request.data.get("allow_pending")),
+            no_consumption=bool(request.data.get("no_consumption")),
+            actor=request.user,
+        )
+        log_action(
+            actor=request.user,
+            action="air_fuel_draw",
+            entity_type="mission",
+            entity_id=mission.pk,
+            after={
+                "aircraft": draw.aircraft_id,
+                "leg": draw.leg_id,
+                "source": draw.source,
+                "quantity": draw.quantity,
+                "litres": float(draw.litres or 0),
+                "item": draw.item_id,
+                "transaction": draw.transaction_id,
+                "state": draw.state,
+            },
+            note=(
+                f"Fuel draw {draw.quantity} {draw.get_source_display().lower()} "
+                f"for {draw.aircraft.display_name} on leg "
+                f"{draw.leg.sequence if draw.leg_id else '—'}"
+            ),
+            request=request,
+        )
+        # Re-read so the response carries the posted draw and the ledger link.
+        mission = self.get_queryset().get(pk=mission.pk)
+        return Response(
+            serializers.MissionSerializer(
+                mission, context=self.get_serializer_context()
+            ).data
+        )
+
+    @action(detail=False, methods=["get"], url_path="fuel-items")
+    def fuel_items(self, request):
+        """POL-01 stores at the aircraft's own station, nearest expiry first."""
+        from apps.ops import air_fuel
+
+        mission = (
+            self.get_queryset()
+            .filter(pk=request.query_params.get("mission") or 0)
+            .first()
+        )
+        leg = None
+        if mission is not None and request.query_params.get("leg"):
+            leg = AirMissionItinerary.objects.filter(
+                pk=request.query_params.get("leg"),
+                aircraft__element__air_detail__mission=mission,
+            ).first()
+        return Response(
+            {
+                "results": air_fuel.items_payload(
+                    request.user, mission=mission, leg=leg
+                )
+            }
+        )
+
+    @action(detail=False, methods=["get"], url_path="fuel-unrecorded")
+    def fuel_unrecorded(self, request):
+        """Landed air sorties that still owe a fuel figure."""
+        from django.utils.dateparse import parse_date
+
+        from apps.ops import air_fuel
+
+        rows = air_fuel.unrecorded_missions(
+            request.user, air_date=parse_date(request.query_params.get("air_date") or "")
+        )
+        return Response({"count": len(rows), "results": rows})
 
     # -- Daily Operations board actions -----------------------------------
 
@@ -1254,6 +1480,12 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
         mission.is_held = False
         mission.held_at = None
         mission.save(update_fields=["status", "is_held", "held_at", "updated_at"])
+        # The ground side of a cancelled mission cannot run any more: close
+        # its trips and put their vehicles back before the audit entry is
+        # written, so the board never shows a movement for a dead plan.
+        from apps.ops import tracking as tracking_service
+
+        tracking_service.cancel_for_mission(mission, request.user, note=reason)
 
         log_action(
             actor=request.user,
@@ -2409,7 +2641,14 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             raise ValidationError(
                 {"detail": "Actual leg times apply to air missions only."}
             )
-        if mission.status in {"completed", "cancelled"}:
+        event = (request.data.get("event") or "").strip().lower()
+        wants_se = event == "se" or "se" in request.data
+        wants_sd = event == "sd" or "sd" in request.data
+        # The final landing closes the mission at ATA, but the engines are shut
+        # down after that landing: SD stays recordable on a flown leg.
+        if mission.status in {"completed", "cancelled"} and not (
+            mission.status == "completed" and wants_sd
+        ):
             raise ValidationError({"detail": "This mission is closed."})
         itinerary = (
             AirMissionItinerary.objects.select_related(
@@ -2431,9 +2670,10 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             "ata": itinerary.ata.isoformat() if itinerary.ata else None,
             "tot": itinerary.tot.isoformat() if itinerary.tot else None,
             "toot": itinerary.toot.isoformat() if itinerary.toot else None,
+            "se": itinerary.se.isoformat() if itinerary.se else None,
+            "sd": itinerary.sd.isoformat() if itinerary.sd else None,
             "status": itinerary.status,
         }
-        event = (request.data.get("event") or "").strip().lower()
         previous = (
             AirMissionItinerary.objects.filter(
                 aircraft=itinerary.aircraft,
@@ -2501,6 +2741,30 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                     )
                 }
             )
+        if wants_se and origin_is_over:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "No engine start is recorded after an overflight leg; "
+                        "the aircraft never shut down at the target."
+                    )
+                }
+            )
+        if wants_sd and itinerary.overflight:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "An overflight leg records TOT, not a shutdown; the "
+                        "aircraft flies on without landing."
+                    )
+                }
+            )
+        if wants_se and itinerary.ata:
+            raise ValidationError(
+                {"se": "SE must be recorded before the leg lands."}
+            )
+        if wants_sd and not itinerary.ata:
+            raise ValidationError({"sd": "Record ATA before SD."})
         if wants_takeoff and previous and not previous.ata:
             raise ValidationError(
                 {"atd": "Record ATA on the previous leg before ATD."}
@@ -2560,6 +2824,14 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             itinerary.toot = _parse_time(
                 request.data.get("toot", request.data.get("at")), "toot"
             ) or _now()
+        if wants_se:
+            itinerary.se = _parse_time(
+                request.data.get("se", request.data.get("at")), "se"
+            ) or _now()
+        if wants_sd:
+            itinerary.sd = _parse_time(
+                request.data.get("sd", request.data.get("at")), "sd"
+            ) or _now()
         if event == "cancel":
             itinerary.status = AirMissionItinerary.STATUS_CANCELLED
         elif event == "divert":
@@ -2575,6 +2847,10 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             raise ValidationError(
                 {"ata": "ATA must not precede ATD."}
             )
+        if itinerary.se and itinerary.atd and itinerary.se > itinerary.atd:
+            raise ValidationError({"se": "SE must not follow ATD."})
+        if itinerary.sd and itinerary.ata and itinerary.sd < itinerary.ata:
+            raise ValidationError({"sd": "SD must not precede ATA."})
         if itinerary.toot and not itinerary.tot:
             raise ValidationError(
                 {"toot": "Record TOT before TOOT."}
@@ -2588,7 +2864,7 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 {"toot": "TOOT must not precede TOT."}
             )
         itinerary.save(
-            update_fields=["atd", "ata", "tot", "toot", "status"]
+            update_fields=["atd", "ata", "tot", "toot", "se", "sd", "status"]
         )
 
         # The board is the air execution path: the first ATD starts the mission,
@@ -2605,21 +2881,17 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 mission.save(update_fields=[*status_fields, "updated_at"])
 
         detail = itinerary.aircraft.element.air_detail
-        landings = list(
-            AirMissionItinerary.objects.filter(
-                aircraft__element__air_detail=detail,
-                ata__isnull=False,
-            ).values_list("ata", flat=True)
-        )
         final_at = _air_mission_final_time(detail)
         relocated = []
         if final_at is not None:
+            # Only the last leg of every aircraft closes the mission. A landing
+            # at an intermediate stop is not the mission's arrival, so it must
+            # never reach ``actual_arrival``: dependents read that field as "the
+            # predecessor is on the ground at its destination", and the map
+            # reads it as "the whole itinerary has been flown".
             detail.actual_arrival = final_at
             detail.rendezvous_ready_at = final_at
             detail.save(update_fields=["actual_arrival", "rendezvous_ready_at"])
-        elif landings:
-            detail.actual_arrival = max(landings)
-            detail.save(update_fields=["actual_arrival"])
 
         if final_at is not None and mission.status not in {"completed", "cancelled"}:
             relocated = _relocate_air_assets(detail)
@@ -2643,6 +2915,8 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 "ata": itinerary.ata.isoformat() if itinerary.ata else None,
                 "tot": itinerary.tot.isoformat() if itinerary.tot else None,
                 "toot": itinerary.toot.isoformat() if itinerary.toot else None,
+                "se": itinerary.se.isoformat() if itinerary.se else None,
+                "sd": itinerary.sd.isoformat() if itinerary.sd else None,
                 "status": itinerary.status,
                 "mission_status": mission.status,
                 "mission_completed_at": (
@@ -5025,6 +5299,17 @@ class InventoryCategoryViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "code"]
     ordering_fields = ["kind", "name", "code"]
 
+    def get_permissions(self):
+        """The catalogue is read by everyone who reads the register.
+
+        Adding, renaming or removing a category is the System Administrator's
+        call: a Logistics Officer uses the codes they are given and requests a
+        new one through their administrator.
+        """
+        if self.action in {"create", "update", "partial_update", "destroy"}:
+            return [IsAuthenticated(), IsAdministrator()]
+        return super().get_permissions()
+
     def destroy(self, request, *args, **kwargs):
         """Refuse to remove a category that still holds items.
 
@@ -5122,9 +5407,15 @@ class InventoryItemViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
         # Asset class (materiel, equipment, AGE, firearms, ammunition, ...).
         # ``filterset_fields`` cannot express the related lookup, so it is
         # applied here where the unit and sensitive scoping already happens.
-        kind = self.request.query_params.get("kind")
-        if kind:
-            queryset = queryset.filter(category__kind=kind)
+        # A section tab may span two kinds - the Armory is firearms and
+        # ammunition - so the value is a comma list as well as a single kind.
+        kinds = [
+            value.strip()
+            for value in (self.request.query_params.get("kind") or "").split(",")
+            if value.strip()
+        ]
+        if kinds:
+            queryset = queryset.filter(category__kind__in=kinds)
         return queryset
 
     @action(detail=True, methods=["post"])
@@ -5637,6 +5928,17 @@ class VehicleTripViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
     filterset_fields = ["status", "mission"]
     search_fields = ["trip_number", "title", "purpose"]
     audit_entity = "vehicle_trip"
+
+    def perform_destroy(self, instance):
+        # A trip's runs cascade away with it, so its vehicles must be
+        # released here: no run is left that could ever clear their
+        # "on trip" status, and the truck would stay out for a trip that
+        # no longer exists.
+        from apps.ops import tracking
+
+        with transaction.atomic():
+            tracking.release_trip_vehicles(instance)
+            super().perform_destroy(instance)
 
     def get_queryset(self):
         return VehicleTrip.objects.select_related("mission", "created_by").prefetch_related(
@@ -6549,10 +6851,13 @@ class OperationalPictureView(APIView):
         "vehicles",
         "trips",
         "hazards",
+        "fuel",
     }
 
     def get(self, request):
         from apps.command.models import HazardLocation, VehiclePosition
+        from apps.core import roles as role_codes
+        from apps.core.scoping import hidden_unit_ids
         from apps.legacy.models import HazardRegistry
 
         requested_layers = {
@@ -6576,6 +6881,21 @@ class OperationalPictureView(APIView):
             scope = {narrow_id}
 
         from apps.legacy.models import Unit
+
+        # An Operations Center watches the whole area picture: every active
+        # unit's boundary and location pin is drawn, so a neighbouring area is
+        # never a blank corner. Missions, mobility, air assets, fuel and
+        # hazards keep the caller's own scope - widening this is a map read,
+        # not access to another unit's operations.
+        boundary_scope = scope
+        if (
+            not narrow_to
+            and role_codes.ROLE_OPERATIONS_CENTER
+            in role_codes.effective_roles(request.user)
+        ):
+            boundary_scope = set(
+                Unit.objects.filter(is_active=True).values_list("id", flat=True)
+            ) - hidden_unit_ids(request.user)
 
         units = list(
             Unit.objects.filter(id__in=scope).values("id", "name", "acronym", "parent_id")
@@ -6629,7 +6949,7 @@ class OperationalPictureView(APIView):
         aors_payload = []
         if "aor" in layers:
             aor_qs = AreaOfResponsibility.objects.filter(is_active=True).filter(
-                Q(unit_id__in=scope) | Q(unit_id__isnull=True)
+                Q(unit_id__in=boundary_scope) | Q(unit_id__isnull=True)
             )
             aors_payload = [
                 {
@@ -6649,7 +6969,11 @@ class OperationalPictureView(APIView):
         positions_payload = []
         vehicles_without_position = 0
         if "vehicles" in layers:
-            vehicles = Vehicle.objects.filter(is_active=True).filter(
+            # Mobility means the unit's establishment, exactly as the Mobility
+            # Assets register lists it. A POV is a person's car: once its trip
+            # ends its last reported point is a stale dot with no mission behind
+            # it, so it is never drawn here. Its trip stays on the record.
+            vehicles = Vehicle.objects.filter(is_active=True, is_pov=False).filter(
                 Q(unit_id__in=scope) | Q(unit_id__isnull=True)
             )
             latest: dict[int, VehiclePosition] = {}
@@ -6739,6 +7063,13 @@ class OperationalPictureView(APIView):
                     }
                 )
 
+        fuel_payload = []
+        fuel_without_position = 0
+        if "fuel" in layers:
+            from apps.ops.inventory_views import fuel_positions
+
+            fuel_payload, fuel_without_position = fuel_positions(scope)
+
         hazards_payload = []
         hazards_without_location = 0
         if "hazards" in layers:
@@ -6767,7 +7098,7 @@ class OperationalPictureView(APIView):
         units_payload = []
         if "units" in layers:
             units_payload = unit_map.markers_with_coordinates(
-                Unit.objects.filter(id__in=scope, is_active=True)
+                Unit.objects.filter(id__in=boundary_scope, is_active=True)
             )
 
         center = None
@@ -6822,6 +7153,8 @@ class OperationalPictureView(APIView):
                 "trip_routes": trips_payload,
                 "hazards": hazards_payload,
                 "hazards_without_location": hazards_without_location,
+                "fuel_positions": fuel_payload,
+                "fuel_without_position": fuel_without_position,
                 "units": units_payload,
                 "counts": {
                     "missions": len(mission_points),
@@ -6833,8 +7166,14 @@ class OperationalPictureView(APIView):
                     "trip_routes": len(trips_payload),
                     "hazards": len(hazards_payload),
                     "units": len(units_payload),
+                    "fuel_positions": len(fuel_payload),
                 },
                 "layers": sorted(layers),
+                # Which boundaries the map is showing: the caller's own scope,
+                # or (for an Operations Center) every active unit.
+                "boundary_scope": (
+                    "all_units" if boundary_scope != scope else "unit"
+                ),
                 "generated_at": _now(),
             }
         )

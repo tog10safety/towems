@@ -2,7 +2,8 @@ import DashboardMap from "../components/DashboardMap.jsx";
 import SafetyAnalytics from "../components/SafetyAnalytics.jsx";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { useApi } from "../hooks/useApi.js";
-import { ErrorBanner, Loading, Stat } from "../components/ui.jsx";
+import { Badge, Card, ErrorBanner, Loading, Stat, Table } from "../components/ui.jsx";
+import { formatDate, number } from "../utils/format.js";
 
 export default function DashboardPage() {
   const { permissions } = useAuth();
@@ -18,8 +19,12 @@ export default function DashboardPage() {
   const mrm = data?.mrm ?? {};
   const personnel = data?.personnel ?? {};
   const inventory = data?.inventory ?? {};
+  const fuel = data?.fuel ?? {};
   const vehicles = data?.vehicles ?? {};
-  const trips = data?.trips ?? {};
+  const onTrip = vehicles.on_trip_details ?? [];
+  // The shelf lives that run out first, in this caller's unit scope.
+  const watch = data?.watch ?? {};
+  const fuelWatch = watch.fuel_expiring ?? [];
   const byStatus = missions.by_status ?? {};
 
   return (
@@ -37,12 +42,12 @@ export default function DashboardPage() {
         <Stat
           label="Ground Operations"
           value={missions.by_category?.ground ?? 0}
-          hint={`${byStatus.active ?? 0} active · ${byStatus.approved ?? 0} approved`}
+          hint={`${byStatus.active ?? 0} active · ${byStatus.planned ?? 0} planned · ${byStatus.completed ?? 0} completed`}
         />
         <Stat
           label="Air Operations"
           value={missions.by_category?.air ?? 0}
-          hint={`${byStatus.planned ?? 0} planned · ${byStatus.completed ?? 0} completed`}
+          hint={`${byStatus.active ?? 0} active · ${byStatus.planned ?? 0} planned · ${byStatus.completed ?? 0} completed`}
         />
         <Stat
           label="Risk Awaiting Action"
@@ -65,18 +70,35 @@ export default function DashboardPage() {
           label="Inventory Items"
           value={inventory.items ?? 0}
           hint={`${inventory.unserviceable ?? 0} unserviceable · ${inventory.low_stock ?? 0} low stock`}
-          tone={inventory.low_stock ? "warning" : undefined}
+          tone={inventory.unserviceable ? "danger" : inventory.low_stock ? "warning" : undefined}
+        />
+        <Stat
+          label="POL Available"
+          value={`${number(fuel.litres_available ?? 0)} L`}
+          hint={`${number(fuel.drums_available ?? 0)} drums · ${number(fuel.expiring ?? 0)} expiring`}
+          tone={fuel.expiring ? "warning" : undefined}
         />
         <Stat
           label="Vehicles Available"
           value={vehicles.available ?? 0}
           hint={`${vehicles.on_trip ?? 0} on trip`}
-        />
-        <Stat
-          label="Trips In Progress"
-          value={trips.in_progress ?? 0}
-          hint={`${trips.planned ?? 0} planned`}
-        />
+        >
+          {onTrip.length > 0 && (
+            <ul className="stat-list">
+              {onTrip.map((row) => (
+                <li key={`${row.trip_number}-${row.vehicle_id}`}>
+                  <span className="stat-list-vehicle">{row.registration_number}</span>
+                  {/* POV is a person's car on a mission trip; PAFMV is a unit
+                      vehicle from the register, counted above. */}
+                  <span className="stat-list-kind">{row.kind}</span>
+                  <span className="stat-list-trip" title={row.trip_title}>
+                    {row.trip_number}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Stat>
         {isAdmin && (
           <Stat
             label="AORs Mapped"
@@ -85,6 +107,55 @@ export default function DashboardPage() {
           />
         )}
       </div>
+
+      {/* Monitoring is what needs a decision, not another count: the POL drum
+          batches whose shelf life runs out first, already expired ones at the
+          top, so the issue or test order is written on the dashboard. */}
+      <Card
+        title="Operational watch list"
+        actions={
+          <Badge tone={watch.fuel_expiring_count ? "warning" : "success"}>
+            {watch.fuel_expiring_count
+              ? `${number(watch.fuel_expiring_count)} POL batch${watch.fuel_expiring_count === 1 ? "" : "es"} expiring`
+              : "POL clear"}
+          </Badge>
+        }
+      >
+        <p className="hint" style={{ marginTop: 0 }}>
+          POL drum stock in your unit scope with {watch.horizon_days ?? 30} days of shelf life
+          left, or already past its date. Bulk tanks do not carry a shelf life; the inventory
+          board monitors their balance.
+        </p>
+        <Table
+          rows={fuelWatch}
+          stack
+          empty={`No POL drum batch expires in the next ${watch.horizon_days ?? 30} days.`}
+          columns={[
+            { key: "grade", label: "Grade", render: (row) => row.grade || "—" },
+            { key: "location", label: "Held at", render: (row) => row.location || "—" },
+            { key: "drums", label: "Drums", render: (row) => number(row.drums) },
+            { key: "litres", label: "Litres", render: (row) => `${number(row.litres)} L` },
+            {
+              key: "expiry",
+              label: "Expires",
+              render: (row) => (
+                <span className="inline-row" style={{ gap: 8 }}>
+                  {formatDate(row.expiry_date)}
+                  <Badge
+                    tone={row.days_left < 0 ? "danger" : row.days_left <= 7 ? "warning" : "muted"}
+                  >
+                    {row.days_left < 0
+                      ? "expired"
+                      : row.days_left === 0
+                        ? "today"
+                        : `${row.days_left}d`}
+                  </Badge>
+                </span>
+              ),
+            },
+          ]}
+        />
+      </Card>
 
       <SafetyAnalytics data={data?.safety} onRefresh={reload} />
 

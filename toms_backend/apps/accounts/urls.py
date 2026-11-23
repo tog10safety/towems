@@ -1,6 +1,6 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.accounts import presence, profile, views
 
@@ -11,6 +11,18 @@ router.register("admin/users", views.UserAdminViewSet, basename="admin-users")
 urlpatterns = [
     path("auth/csrf/", views.CsrfTokenView.as_view(), name="auth-csrf"),
     path("auth/login/", views.LoginView.as_view(), name="auth-login"),
+    path("auth/mfa/", views.MFAStatusView.as_view(), name="auth-mfa-status"),
+    path("auth/mfa/setup/", views.MFASetupView.as_view(), name="auth-mfa-setup"),
+    path(
+        "auth/mfa/setup/verify/",
+        views.MFAVerifySetupView.as_view(),
+        name="auth-mfa-setup-verify",
+    ),
+    path(
+        "auth/mfa/challenge/",
+        views.MFAChallengeView.as_view(),
+        name="auth-mfa-challenge",
+    ),
     path("auth/logout/", views.LogoutView.as_view(), name="auth-logout"),
     path("auth/me/", views.MeView.as_view(), name="auth-me"),
     path("auth/password/", views.ChangePasswordView.as_view(), name="auth-password"),
@@ -38,8 +50,13 @@ urlpatterns = [
     path("presence/", presence.OnlineNowView.as_view(), name="presence"),
     # Authoritative role catalogue for the admin interface.
     path("roles/", views.RoleCatalogueView.as_view(), name="role-catalogue"),
-    # Stateless JWT for API clients / integrations.
-    path("auth/token/", TokenObtainPairView.as_view(), name="token-obtain"),
+    # Stateless JWT for API clients / integrations. Refused while a first-sign-in
+    # gate is open, because token clients bypass the session middleware.
+    path(
+        "auth/token/",
+        views.SetupAwareTokenObtainPairView.as_view(),
+        name="token-obtain",
+    ),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("", include(router.urls)),
 ]

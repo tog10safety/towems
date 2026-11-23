@@ -169,6 +169,16 @@ class UserSummarySerializer(SeatUnitPrivacyMixin, ProfileDetailsMixin, serialize
     unit_acronym = serializers.CharField(source="unit.acronym", read_only=True)
     accessible_unit_ids = serializers.SerializerMethodField()
     sections = serializers.SerializerMethodField()
+    mfa_required = serializers.SerializerMethodField()
+    mfa_enabled = serializers.SerializerMethodField()
+    mfa_account = serializers.SerializerMethodField()
+    mfa_enrollment_required = serializers.SerializerMethodField()
+    mfa_setup_required = serializers.SerializerMethodField()
+    mfa_verified = serializers.SerializerMethodField()
+    mfa_grace_deadline = serializers.SerializerMethodField()
+    mfa_grace_days_remaining = serializers.SerializerMethodField()
+    mfa_recovery_codes_remaining = serializers.SerializerMethodField()
+    mfa_enrolled_at = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -195,7 +205,74 @@ class UserSummarySerializer(SeatUnitPrivacyMixin, ProfileDetailsMixin, serialize
             "password_expiry_date",
             "accessible_unit_ids",
             "sections",
+            "mfa_required",
+            "mfa_enabled",
+            "mfa_account",
+            "mfa_enrollment_required",
+            "mfa_setup_required",
+            "mfa_verified",
+            "mfa_grace_deadline",
+            "mfa_grace_days_remaining",
+            "mfa_recovery_codes_remaining",
+            "mfa_enrolled_at",
         ]
+
+    def _mfa(self, obj) -> dict:
+        from apps.accounts import mfa
+
+        cache = getattr(self, "_mfa_cache", {})
+        if obj.pk not in cache:
+            request = self.context.get("request")
+            if request is not None and getattr(request.user, "pk", None) != obj.pk:
+                # Personnel records are visible to colleagues; second-factor
+                # state and recovery-code counts are not. Only the account
+                # itself (login, /me) and the admin serializer receive them.
+                cache[obj.pk] = {
+                    "mfa_required": False,
+                    "mfa_enabled": False,
+                    "mfa_account": "",
+                    "mfa_enrollment_required": False,
+                    "mfa_setup_required": False,
+                    "mfa_verified": False,
+                    "mfa_grace_deadline": None,
+                    "mfa_grace_days_remaining": None,
+                    "mfa_recovery_codes_remaining": 0,
+                    "mfa_enrolled_at": None,
+                }
+            else:
+                cache[obj.pk] = mfa.status_payload(obj, request)
+        self._mfa_cache = cache
+        return cache[obj.pk]
+
+    def get_mfa_required(self, obj):
+        return self._mfa(obj)["mfa_required"]
+
+    def get_mfa_enabled(self, obj):
+        return self._mfa(obj)["mfa_enabled"]
+
+    def get_mfa_account(self, obj):
+        return self._mfa(obj)["mfa_account"]
+
+    def get_mfa_enrollment_required(self, obj):
+        return self._mfa(obj)["mfa_enrollment_required"]
+
+    def get_mfa_setup_required(self, obj):
+        return self._mfa(obj)["mfa_setup_required"]
+
+    def get_mfa_verified(self, obj):
+        return self._mfa(obj)["mfa_verified"]
+
+    def get_mfa_grace_deadline(self, obj):
+        return self._mfa(obj)["mfa_grace_deadline"]
+
+    def get_mfa_grace_days_remaining(self, obj):
+        return self._mfa(obj)["mfa_grace_days_remaining"]
+
+    def get_mfa_recovery_codes_remaining(self, obj):
+        return self._mfa(obj)["mfa_recovery_codes_remaining"]
+
+    def get_mfa_enrolled_at(self, obj):
+        return self._mfa(obj)["mfa_enrolled_at"]
 
     def get_accessible_unit_ids(self, obj):
         return obj.get_accessible_unit_ids()
@@ -481,6 +558,16 @@ class AdminUserSerializer(SeatUnitPrivacyMixin, ProfileDetailsMixin, serializers
     sections = serializers.SerializerMethodField()
     account_role = serializers.CharField(source="authority", read_only=True)
     is_system_owner = serializers.SerializerMethodField()
+    mfa_required = serializers.SerializerMethodField()
+    mfa_enabled = serializers.SerializerMethodField()
+    mfa_account = serializers.SerializerMethodField()
+    mfa_outstanding = serializers.SerializerMethodField()
+    mfa_grace_days_remaining = serializers.SerializerMethodField()
+    mfa_recovery_codes_remaining = serializers.SerializerMethodField()
+    mfa_enrolled_at = serializers.SerializerMethodField()
+    profile_refresh_required = serializers.SerializerMethodField()
+    profile_setup_gaps = serializers.SerializerMethodField()
+    profile_setup_gap_labels = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -508,7 +595,72 @@ class AdminUserSerializer(SeatUnitPrivacyMixin, ProfileDetailsMixin, serializers
             "role_labels",
             "appointments",
             "sections",
+            "mfa_required",
+            "mfa_enabled",
+            "mfa_account",
+            "mfa_outstanding",
+            "mfa_grace_days_remaining",
+            "mfa_recovery_codes_remaining",
+            "mfa_enrolled_at",
+            "profile_refresh_required",
+            "profile_setup_gaps",
+            "profile_setup_gap_labels",
         ]
+
+    def _mfa(self, obj) -> dict:
+        from apps.accounts import mfa
+
+        cache = getattr(self, "_mfa_cache", {})
+        if obj.pk not in cache:
+            cache[obj.pk] = mfa.status_payload(obj, self.context.get("request"))
+        self._mfa_cache = cache
+        return cache[obj.pk]
+
+    def get_mfa_required(self, obj):
+        return self._mfa(obj)["mfa_required"]
+
+    def get_mfa_enabled(self, obj):
+        return self._mfa(obj)["mfa_enabled"]
+
+    def _setup(self, obj) -> dict:
+        """First-sign-in status, computed once per row for the register."""
+        from apps.accounts import setup_gate
+
+        cache = getattr(self, "_setup_cache", {})
+        if obj.pk not in cache:
+            gaps = setup_gate.profile_gaps(obj)
+            cache[obj.pk] = {
+                "profile_refresh_required": setup_gate.onboarding_outstanding(obj),
+                "profile_setup_gaps": gaps,
+                "profile_setup_gap_labels": setup_gate.gap_labels(gaps),
+                "mfa_outstanding": setup_gate.mfa_outstanding(obj),
+            }
+        self._setup_cache = cache
+        return cache[obj.pk]
+
+    def get_mfa_account(self, obj):
+        return self._mfa(obj)["mfa_account"]
+
+    def get_mfa_outstanding(self, obj):
+        return self._setup(obj)["mfa_outstanding"]
+
+    def get_profile_refresh_required(self, obj):
+        return self._setup(obj)["profile_refresh_required"]
+
+    def get_profile_setup_gaps(self, obj):
+        return self._setup(obj)["profile_setup_gaps"]
+
+    def get_profile_setup_gap_labels(self, obj):
+        return self._setup(obj)["profile_setup_gap_labels"]
+
+    def get_mfa_grace_days_remaining(self, obj):
+        return self._mfa(obj)["mfa_grace_days_remaining"]
+
+    def get_mfa_recovery_codes_remaining(self, obj):
+        return self._mfa(obj)["mfa_recovery_codes_remaining"]
+
+    def get_mfa_enrolled_at(self, obj):
+        return self._mfa(obj)["mfa_enrolled_at"]
 
     def _active_sections(self, obj):
         return [
@@ -655,3 +807,13 @@ class ChangePasswordSerializer(serializers.Serializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+class MFAChallengeSerializer(serializers.Serializer):
+    challenge = serializers.CharField()
+    code = serializers.CharField(trim_whitespace=False)
+    recovery = serializers.BooleanField(default=False)
+
+
+class MFACodeSerializer(serializers.Serializer):
+    code = serializers.CharField(trim_whitespace=False)

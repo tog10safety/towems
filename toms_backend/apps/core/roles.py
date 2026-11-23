@@ -188,6 +188,7 @@ CAPABILITY_LABELS = {
     "manage_missions": "Manage missions",
     "approve_missions": "Give the final mission decision",
     "manage_inventory": "Manage inventory",
+    "record_air_fuel": "Record aircraft fuel consumption",
     "manage_vehicles": "Manage the vehicle register",
     "request_inventory": "Request inventory changes",
     "approve_inventory": "Approve inventory requests",
@@ -234,6 +235,9 @@ CAP_MANAGE_PERSONNEL = "manage_personnel"
 CAP_MANAGE_MISSIONS = "manage_missions"
 CAP_APPROVE_MISSIONS = "approve_missions"
 CAP_MANAGE_INVENTORY = "manage_inventory"
+#: Recording the POL-01 an airframe burned on an itinerary leg. The Logistics
+#: Officer, the Logistic NCOIC and the Operations Center hold it.
+CAP_RECORD_AIR_FUEL = "record_air_fuel"
 #: The vehicle register (add, edit, retire a vehicle). Logistics owns it; the
 #: Operations Center only *selects* existing vehicles when planning a mission.
 CAP_MANAGE_VEHICLES = "manage_vehicles"
@@ -314,6 +318,7 @@ ALL_CAPABILITIES = frozenset(
         CAP_MANAGE_MISSIONS,
         CAP_APPROVE_MISSIONS,
         CAP_MANAGE_INVENTORY,
+        CAP_RECORD_AIR_FUEL,
         CAP_MANAGE_VEHICLES,
         CAP_REQUEST_INVENTORY,
         CAP_APPROVE_INVENTORY,
@@ -410,6 +415,10 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAP_VIEW_ALL_INSTRUCTIONS,
             CAP_ROUTE,
             CAP_VIEW_ANALYTICS,
+            # The office that plans the sortie also records the POL-01 burned
+            # on each itinerary leg, so a landed airframe is never left owing
+            # a figure while Logistics is away from the desk.
+            CAP_RECORD_AIR_FUEL,
             # Upkeep of the unit's own AOR record: rename, recolour, archive,
             # restore. Moving boundaries between units stays Administrator-only.
             CAP_MAINTAIN_AOR,
@@ -456,6 +465,7 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAP_REJECT,
             CAP_RETURN,
             CAP_MANAGE_INVENTORY,
+            CAP_RECORD_AIR_FUEL,
             CAP_MANAGE_VEHICLES,
             CAP_VIEW_SENSITIVE_INVENTORY,
             CAP_VIEW_ANALYTICS,
@@ -466,6 +476,8 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
         {
             CAP_VIEW,
             CAP_REQUEST_INVENTORY,
+            # The NCOIC records the fuel figure the crew confirms at shutdown.
+            CAP_RECORD_AIR_FUEL,
             CAP_COMMENT,
             CAP_VIEW_SUBORDINATES,
         }
@@ -943,6 +955,7 @@ def permissions_payload(user) -> dict:
         "is_system_owner": is_owner,
         "can_manage_personnel": CAP_MANAGE_PERSONNEL in caps,
         "can_manage_inventory": CAP_MANAGE_INVENTORY in caps,
+        "can_record_air_fuel": CAP_RECORD_AIR_FUEL in caps,
         "can_manage_vehicles": CAP_MANAGE_VEHICLES in caps,
         "can_view_sensitive_inventory": CAP_VIEW_SENSITIVE_INVENTORY in caps,
         "can_approve_operations": CAP_APPROVE_MISSIONS in caps,

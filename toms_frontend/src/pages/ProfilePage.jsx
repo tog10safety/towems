@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
@@ -70,6 +71,7 @@ function blankProfileForm(data) {
 
 export default function ProfilePage() {
   const { refresh, permissions } = useAuth();
+  const navigate = useNavigate();
   const { data, loading, error, reload, setData } = useApi("/auth/profile/");
 
   const [form, setForm] = useState(blankProfileForm(null));
@@ -183,6 +185,8 @@ export default function ProfilePage() {
       setData(updated);
       setNotice("Setup complete. Welcome to TOWEMS.");
       refresh();
+      // The next required step is Google Authenticator enrolment.
+      navigate("/mfa-setup", { replace: true });
     } catch (err) {
       setActionError(err.message);
     } finally {
@@ -190,8 +194,14 @@ export default function ProfilePage() {
     }
   }
 
+  const emailSuffix = (data?.profile_email_suffix || "@gmail.com").toLowerCase();
+  const emailOk = Boolean(data?.email) && String(data.email).toLowerCase().endsWith(emailSuffix);
   const onboardingReady =
-    data && !data.password_change_required && data.avatar_url && data.has_signature;
+    data &&
+    !data.password_change_required &&
+    data.avatar_url &&
+    data.has_signature &&
+    emailOk;
 
   if (loading && !data) return <Loading label="Loading your profile…" />;
 
@@ -217,19 +227,18 @@ export default function ProfilePage() {
       <ErrorBanner message={error || actionError} onRetry={error ? reload : undefined} />
       {notice && <div className="alert alert-success">{notice}</div>}
 
-      {data?.onboarding_required && (
+      {(data?.profile_setup_required || data?.onboarding_required) && (
         <div className="alert alert-warning">
           <h2 style={{ marginTop: 0 }}>Finish setting up your account</h2>
           <p>
-            Your unit registered you with a temporary password. Complete these three steps
-            before using TOWEMS:
+            Every account updates its own credentials before using TOWEMS. Complete these
+            four steps, then set up Google Authenticator when prompted:
           </p>
           <ul>
-            <li>
-              {data.password_change_required ? "☐" : "☑"} Change the initial password
-            </li>
+            <li>{data.password_change_required ? "☐" : "☑"} Set a new password</li>
             <li>{data.avatar_url ? "☑" : "☐"} Upload a profile picture</li>
             <li>{data.has_signature ? "☑" : "☐"} Upload your signature</li>
+            <li>{emailOk ? "☑" : "☐"} Record your Google (Gmail) account</li>
           </ul>
           <p className="hint">
             You can also update your contact, personal, emergency and AFSC details below.
@@ -277,6 +286,10 @@ export default function ProfilePage() {
               <Detail label="Unit">
                 {data.unit_acronym || data.unit_name || "Unassigned"}
               </Detail>
+              <Detail label="Google (Gmail) account">{data.email || "—"}</Detail>
+              <Detail label="Authenticator account">
+                {data.authenticator_account || "Not enrolled"}
+              </Detail>
               <Detail label="Roles">
                 {data.roles?.length ? data.roles.join(", ") : "—"}
               </Detail>
@@ -320,12 +333,16 @@ export default function ProfilePage() {
                     placeholder="+63 917 000 0000"
                   />
                 </Field>
-                <Field label="Email address" error={fieldErrors.email}>
+                <Field
+                  label="Google (Gmail) account"
+                  error={fieldErrors.email}
+                  hint="Your actual Gmail account; it must end with @gmail.com."
+                >
                   <Input
                     type="email"
                     value={form.email}
                     onChange={(event) => setForm({ ...form, email: event.target.value })}
-                    placeholder="name@example.com"
+                    placeholder="name@gmail.com"
                   />
                 </Field>
                 <Field label="Home address" className="span-2" error={fieldErrors.home_address}>

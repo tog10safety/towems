@@ -103,6 +103,7 @@ appointable.
 | plan missions — create / edit / remove drafts (`manage_missions`) | X | | | | X | | | | | | | |
 | approve missions | X | X | X | | | X | | | | | | |
 | manage inventory — add, edit, delete, record stock movements | X | | | | | | X | | | | | |
+| record aircraft fuel consumption (`record_air_fuel`) | X | | | | X | | X | X | | | | |
 | manage the vehicle register (`manage_vehicles`) | X | | | | | | X | | | | | |
 | request inventory | X | | | | | | X | X | | | | |
 | approve inventory | X | | | | | X | | | | | | |

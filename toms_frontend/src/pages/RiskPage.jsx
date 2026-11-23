@@ -21,7 +21,7 @@ import {
 } from "../components/ui.jsx";
 import Icon from "../components/Icon.jsx";
 import { useApi } from "../hooks/useApi.js";
-import { formatDate } from "../utils/format.js";
+import { formatDate, formatDateRange } from "../utils/format.js";
 import { byRank } from "../utils/ranks.js";
 
 const PAGE_SIZE = 25;
@@ -30,7 +30,7 @@ const PAGE_SIZE = 25;
  * Raise an MRM by hand instead of from an Operations Center mission.
  *
  * Only the title and the evaluator are needed to create the draft; hazards and
- * conditions are filled in on the assessment page it opens.
+ * conditions are filled in on the assessment form it opens.
  */
 function ManualMrmModal({ onClose, onCreated }) {
   const [title, setTitle] = useState("");
@@ -154,9 +154,10 @@ function ManualMrmModal({ onClose, onCreated }) {
 function coveredDates(row) {
   const start = row.date_covered_start;
   const end = row.date_covered_end;
-  if (!start && !end) return "—";
-  if (start && end) return `${formatDate(start)} – ${formatDate(end)}`;
-  return formatDate(start || end);
+  // A multi-day mission prints its window; a one-day one prints the day. An
+  // assessment raised by hand covers the day it was raised.
+  if (!start && !end) return formatDateRange(row.date_created, row.date_created);
+  return formatDateRange(start, end);
 }
 
 export default function RiskPage() {
@@ -553,7 +554,9 @@ export default function RiskPage() {
       {createOpen && (
         <ManualMrmModal
           onClose={() => setCreateOpen(false)}
-          onCreated={(created) => navigate(`/risk/${created.id}`)}
+          // Straight into the assessment form: a fresh draft has nothing to
+          // show on the workflow page until its hazards are scored.
+          onCreated={(created) => navigate(`/risk/${created.id}/edit`)}
         />
       )}
 

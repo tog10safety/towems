@@ -11,7 +11,7 @@ import {
 } from "../components/ui.jsx";
 import PdfViewer from "../components/PdfViewer.jsx";
 import { useApi } from "../hooks/useApi.js";
-import { formatDate, formatDateTime } from "../utils/format.js";
+import { formatDateRange, formatDateTime } from "../utils/format.js";
 
 /**
  * The finished MRM, on its own read-only page.
@@ -191,7 +191,6 @@ export default function MrmViewerPage() {
 function coveredDates(row) {
   const start = row.date_covered_start;
   const end = row.date_covered_end;
-  if (!start && !end) return row.date_created ? formatDate(row.date_created) : "—";
-  if (start && end) return `${formatDate(start)} – ${formatDate(end)}`;
-  return formatDate(start || end);
+  if (!start && !end) return formatDateRange(row.date_created, row.date_created);
+  return formatDateRange(start, end);
 }

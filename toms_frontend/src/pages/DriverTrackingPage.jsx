@@ -1,24 +1,49 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { divIcon } from "leaflet";
+import { MapContainer, Marker, Polyline, Popup, Tooltip, useMap } from "react-leaflet";
 import { API_BASE, api } from "../api/client.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { Button, ErrorBanner, Loading, StatusBadge } from "../components/ui.jsx";
+import BasemapControl from "../components/map/BasemapControl.jsx";
+import MapBasemapLayer from "../components/map/MapBasemapLayer.jsx";
+import Icon from "../components/Icon.jsx";
 import { useApi } from "../hooks/useApi.js";
+import { useTheme } from "../theme/ThemeContext.jsx";
+import {
+  BASEMAP_STORAGE_KEY,
+  readStored,
+  resolveBasemap,
+  writeStored,
+} from "../map/config.js";
 import { formatDateTime } from "../utils/format.js";
 
 /**
  * The driver's own view of a dispatched mission.
  *
- * Built for a phone in a moving vehicle: one thumb-sized action per step, and
- * a GPS stream that survives a dead spot. Positions are queued, written to
- * local storage after every fix so a locked screen or a reload cannot lose
- * them, and sent in batches once the network is back. An official arrival time
- * is always a deliberate tap, never inferred from a breadcrumb.
+ * Built for a phone mounted in a moving vehicle: the map is the page, the road
+ * route and the next stop are always visible, and one thumb-sized button
+ * records the current movement. A GPS stream that survives a dead spot sits
+ * underneath: positions are queued, written to local storage after every fix,
+ * and sent in batches once the network is back. An official arrival time is
+ * always a deliberate tap, never inferred from a breadcrumb.
  */
 
 const FLUSH_MS = 12000;
 const BATCH = 60;
 const MAX_QUEUE = 200;
+const DEFAULT_CENTER = [12.8797, 121.774];
+const WAKE_STORAGE_KEY = "toms.driver.keep-screen-awake";
+const POLL_MS = 30000;
+
+const GPS_LABELS = {
+  idle: "GPS off",
+  locating: "Finding GPS…",
+  live: "Live",
+  sending: "Sending…",
+  offline: "Waiting for network",
+  error: "Not sending",
+};
 
 function toNumber(value) {
   const parsed = Number(value);
@@ -65,12 +90,208 @@ function writeStoredQueue(missionId, runId, rows) {
   }
 }
 
+/** OSRM geometry is GeoJSON `[longitude, latitude]`; Leaflet wants the reverse. */
+function roadPositions(geometry) {
+  const coordinates = geometry?.coordinates ?? [];
+  return coordinates
+    .filter((pair) => Array.isArray(pair) && pair.length >= 2)
+    .map(([longitude, latitude]) => [latitude, longitude]);
+}
+
+function haversineKm(first, second) {
+  if (!Array.isArray(first) || !Array.isArray(second)) return null;
+  const toRad = (value) => (value * Math.PI) / 180;
+  const [lat1, lon1] = first;
+  const [lat2, lon2] = second;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function stopPin(stop, isNext, isFinal) {
+  const tone =
+    stop.status === "departed" || (isFinal && stop.status === "arrived")
+      ? "done"
+      : stop.status === "arrived"
+        ? "arrived"
+        : isNext
+          ? "next"
+          : "pending";
+  return divIcon({
+    className: `driver-pin is-${tone}`,
+    html: `<span>${Number(stop.sequence) || ""}</span>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -16],
+  });
+}
+
+const SELF_ICON = divIcon({
+  className: "driver-self",
+  html: '<span class="driver-self-halo"></span><span class="driver-self-dot"></span>',
+  iconSize: [46, 46],
+  iconAnchor: [23, 23],
+});
+
+/** Fit the map to the route and position once, and again after any resize. */
+function DriverMapFit({ points, revision }) {
+  const map = useMap();
+  const key = points.map((point) => point.join(",")).join("|");
+
+  useEffect(() => {
+    // Showing the panel or maximising the map changes the container size
+    // without a window resize, which Leaflet does not notice by itself.
+    map.invalidateSize();
+    if (points.length === 1) map.setView(points[0], 15);
+    else if (points.length > 1) {
+      map.fitBounds(points, { padding: [44, 44], maxZoom: 15 });
+    }
+  }, [key, revision]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return null;
+}
+
+function DriverRecenter({ point, token }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!point) return;
+    map.flyTo(point, Math.max(map.getZoom(), 15), { duration: 0.6 });
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return null;
+}
+
+/**
+ * Leaflet parks its attribution notice in a corner container at z-index 1000,
+ * where it floats over whatever the page draws inside the map. Handing the
+ * control to a slot in the page's own layout keeps the copyright notice
+ * visible without it ever sitting on top of the trip details, at any width.
+ */
+function DriverAttribution({ hostRef }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const notice = map.attributionControl?.getContainer();
+    const host = hostRef.current;
+    if (!notice || !host) return undefined;
+    host.appendChild(notice);
+  }, [map, hostRef]);
+
+  return null;
+}
+
+function ExpandGlyph({ expanded }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {expanded ? (
+        <>
+          <path d="M9 4v5H4" />
+          <path d="M15 20v-5h5" />
+          <path d="M20 9h-5V4" />
+          <path d="M4 15h5v5" />
+        </>
+      ) : (
+        <>
+          <path d="M4 9V4h5" />
+          <path d="M20 15v5h-5" />
+          <path d="M15 4h5v5" />
+          <path d="M9 20H4v-5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function LocateGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+    </svg>
+  );
+}
+
+/** The itinerary as recorded times, never as inferred ones. */
+function StopTimeline({ stops }) {
+  if (!stops.length) {
+    return <p className="hint">No stop has been planned for this vehicle.</p>;
+  }
+  return (
+    <ol className="stop-timeline driver-timeline">
+      {stops.map((stop, index) => {
+        const isFinal = index === stops.length - 1;
+        const tone =
+          stop.status === "departed"
+            ? "stop-departed"
+            : stop.status === "arrived"
+              ? isFinal
+                ? "stop-arrived stop-completed"
+                : "stop-arrived"
+              : "";
+        const when =
+          stop.status === "departed"
+            ? `Departed ${formatDateTime(stop.departed_at)}`
+            : stop.status === "arrived"
+              ? `Arrived ${formatDateTime(stop.arrived_at)}`
+              : `Planned ${formatDateTime(
+                  stop.planned_arrival || stop.planned_departure
+                )}`;
+        const state =
+          stop.status === "departed"
+            ? "Done"
+            : stop.status === "arrived"
+              ? isFinal
+                ? "Complete"
+                : "Here"
+              : "Pending";
+        return (
+          <li key={stop.id} className={`stop-row ${tone}`}>
+            <div className="stop-copy">
+              <strong>
+                {stop.sequence}. {stop.location_name}
+              </strong>
+              <p className="hint">{when}</p>
+            </div>
+            <span className={`driver-stop-state is-${stop.status}`}>{state}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export default function DriverTrackingPage() {
   const { id } = useParams();
   const { user } = useAuth();
+  const { resolvedTheme } = useTheme();
   const { data, loading, error, reload, setData } = useApi(`/missions/${id}/tracking/`, {
     deps: [id],
   });
+  const config = useApi("/map/config/");
 
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState("");
@@ -84,7 +305,19 @@ export default function DriverTrackingPage() {
   const [online, setOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine !== false
   );
+  // Remembered on this phone: once a driver turns the keep-awake setting on,
+  // the next shift does not have to find it again.
+  const [keepAwake, setKeepAwake] = useState(() =>
+    readStored(WAKE_STORAGE_KEY, true) !== false
+  );
   const [screenAwake, setScreenAwake] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(true);
+  const [focusToken, setFocusToken] = useState(0);
+  const [basemapId, setBasemapId] = useState(() =>
+    readStored(BASEMAP_STORAGE_KEY, "")
+  );
+  const [basemapFailure, setBasemapFailure] = useState("");
 
   const queue = useRef([]);
   const queueRun = useRef(null);
@@ -92,14 +325,15 @@ export default function DriverTrackingPage() {
   const flushTimer = useRef(null);
   const activeRunRef = useRef(null);
   const wakeLock = useRef(null);
+  const attributeHost = useRef(null);
 
   const runs = data?.runs ?? [];
   const delays = data?.delays ?? [];
+  const canRecordOthers = Boolean(data?.can_manage || data?.is_lead);
   const myRuns = useMemo(
     () => runs.filter((run) => run.driver && String(run.driver) === String(user?.id)),
     [runs, user?.id]
   );
-  const canRecordOthers = Boolean(data?.can_manage || data?.is_lead);
   const actionable = useMemo(
     () =>
       runs.filter(
@@ -109,6 +343,42 @@ export default function DriverTrackingPage() {
       ),
     [runs, canRecordOthers, user?.id]
   );
+  const activeRun = useMemo(
+    () => runs.find((run) => run.id === activeRunId) || null,
+    [runs, activeRunId]
+  );
+
+  const basemap = useMemo(
+    () => resolveBasemap(config.data, basemapId, resolvedTheme),
+    [config.data, basemapId, resolvedTheme]
+  );
+
+  const activeStops = activeRun?.stops ?? [];
+  const nextIndex = activeStops.findIndex((stop) => stop.status === "pending");
+  const nextStop = nextIndex >= 0 ? activeStops[nextIndex] : null;
+  const previousStop = nextIndex > 0 ? activeStops[nextIndex - 1] : null;
+  const recordedStops = activeStops.filter((stop) => stop.status !== "pending").length;
+  const selfPoint = lastFix
+    ? [lastFix.latitude, lastFix.longitude]
+    : activeRun?.last_latitude != null && activeRun?.last_longitude != null
+      ? [activeRun.last_latitude, activeRun.last_longitude]
+      : null;
+  const route = roadPositions(activeRun?.route?.geometry);
+  const trail = (activeRun?.recent_pings ?? [])
+    .filter((ping) => ping.latitude != null && ping.longitude != null)
+    .map((ping) => [ping.latitude, ping.longitude]);
+  const distanceToNext =
+    selfPoint && nextStop && nextStop.latitude != null
+      ? haversineKm(selfPoint, [nextStop.latitude, nextStop.longitude])
+      : null;
+
+  const mapPoints = [...route];
+  activeStops.forEach((stop) => {
+    if (stop.latitude != null && stop.longitude != null) {
+      mapPoints.push([stop.latitude, stop.longitude]);
+    }
+  });
+  if (selfPoint) mapPoints.push(selfPoint);
 
   // Restore any breadcrumbs that were never sent before the page was closed.
   useEffect(() => {
@@ -129,6 +399,13 @@ export default function DriverTrackingPage() {
     activeRunRef.current = activeRunId;
   }, [activeRunId]);
 
+  // Another operator may open or close a run, or record a milestone, while this
+  // phone has the page open, so the driver's picture is refreshed too.
+  useEffect(() => {
+    const timer = window.setInterval(() => reload(), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+
   useEffect(() => {
     function goOnline() {
       setOnline(true);
@@ -143,6 +420,16 @@ export default function DriverTrackingPage() {
       window.removeEventListener("offline", goOffline);
     };
   }, []);
+
+  useEffect(() => {
+    writeStored(WAKE_STORAGE_KEY, keepAwake);
+  }, [keepAwake]);
+
+  function chooseBasemap(value) {
+    setBasemapId(value);
+    writeStored(BASEMAP_STORAGE_KEY, value);
+    setBasemapFailure("");
+  }
 
   function persist() {
     writeStoredQueue(id, queueRun.current, queue.current);
@@ -248,7 +535,9 @@ export default function DriverTrackingPage() {
   // Keep the phone's screen on while the position is being shared. Browsers
   // drop the lock whenever the tab is hidden, so it is re-acquired on return.
   useEffect(() => {
-    if (!streaming) {
+    const supported =
+      typeof navigator !== "undefined" && "wakeLock" in navigator;
+    if (!streaming || !keepAwake || !supported) {
       setScreenAwake(false);
       if (wakeLock.current) {
         wakeLock.current.release?.().catch(() => {});
@@ -259,7 +548,6 @@ export default function DriverTrackingPage() {
     let cancelled = false;
 
     async function acquire() {
-      if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
       try {
         const lock = await navigator.wakeLock.request("screen");
         if (cancelled) {
@@ -288,7 +576,7 @@ export default function DriverTrackingPage() {
       }
       setScreenAwake(false);
     };
-  }, [streaming]);
+  }, [streaming, keepAwake]);
 
   async function record(run, action, stop) {
     setBusy(`${run.id}:${action}:${stop?.id ?? ""}`);
@@ -318,40 +606,97 @@ export default function DriverTrackingPage() {
   if (!data) return null;
 
   const mission = data.mission;
-  const activeRun = runs.find((run) => run.id === activeRunId) || null;
-  const activeDelay = delays.find((row) => row.run === activeRunId) || null;
-  const stale = runs.every((run) => run.status !== "active");
+  const activeDelay = delays.find((row) => row.run === activeRun?.id) || null;
+  const mine = Boolean(activeRun && String(activeRun.driver) === String(user?.id));
+  const editable = Boolean(
+    activeRun && activeRun.status === "active" && (mine || data.can_manage || data.is_lead)
+  );
+  // The Operations Center may have written a dispatch ATD; only the driver's
+  // own confirmation counts as the wheel-roll, so it is still asked for.
+  const awaitingDeparture = Boolean(activeRun && activeRun.atd_source !== "driver");
+  const canArriveNext = Boolean(
+    editable &&
+      nextStop &&
+      nextIndex > 0 &&
+      nextStop.status === "pending" &&
+      previousStop?.status === "departed"
+  );
+  const canDepartNext = Boolean(
+    editable &&
+      nextStop &&
+      nextStop.status === "arrived" &&
+      nextIndex < activeStops.length - 1
+  );
+  const allStopsRecorded =
+    activeStops.length > 0 && activeStops.every((stop) => stop.status !== "pending");
+  const wakeSupported =
+    typeof navigator !== "undefined" && "wakeLock" in navigator;
+
+  let primaryAction = null;
+  if (editable && activeRun) {
+    if (awaitingDeparture) {
+      primaryAction = {
+        label: "Confirm departure",
+        onClick: () => record(activeRun, "depart"),
+      };
+    } else if (canArriveNext) {
+      primaryAction = {
+        label: `Arrived at stop ${nextStop.sequence}`,
+        onClick: () => record(activeRun, "arrive_stop", nextStop),
+      };
+    } else if (canDepartNext) {
+      primaryAction = {
+        label: `Depart stop ${nextStop.sequence}`,
+        onClick: () => record(activeRun, "depart_stop", nextStop),
+      };
+    } else if (allStopsRecorded) {
+      primaryAction = {
+        label: "Complete this run",
+        onClick: () => record(activeRun, "complete"),
+      };
+    }
+  }
 
   return (
-    <>
-      <div className="page-head driver-head">
-        <div>
-          <p className="hint">
-            <Link to={`/missions/${mission.id}`}>← Mission record</Link>
-          </p>
-          <h1>{mission.mission_number}</h1>
-          <p>
-            {mission.title} <StatusBadge status={mission.status} />
-          </p>
-          <p className="hint">
-            {mission.location_name || "Objective area"} ·{" "}
-            {mission.start_at ? formatDateTime(mission.start_at) : "No start time"}
-          </p>
+    <div className={`driver-app${expanded ? " is-expanded" : ""}`}>
+      <header className="driver-bar">
+        <Link
+          className="driver-icon-button"
+          to={`/missions/${mission.id}`}
+          aria-label="Back to the mission record"
+          title="Back to the mission record"
+        >
+          ←
+        </Link>
+        <div className="driver-bar-copy">
+          <strong>{mission.mission_number}</strong>
+          <span>
+            {mission.location_name || mission.title} ·{" "}
+            <StatusBadge status={mission.status} />
+          </span>
         </div>
-        <div className="btn-row">
-          <Button variant="ghost" size="sm" onClick={reload}>
-            Refresh
-          </Button>
+        <div className="driver-bar-actions">
+          <button
+            type="button"
+            className="driver-icon-button"
+            onClick={reload}
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            <Icon name="refresh" size={18} />
+          </button>
           <a
-            className="btn btn-ghost btn-sm"
+            className="driver-icon-button"
             href={`${API_BASE}/missions/${mission.id}/tracking/log/`}
             target="_blank"
             rel="noreferrer"
+            aria-label="Open the movement log"
+            title="Movement log"
           >
-            Movement log
+            <Icon name="download" size={18} />
           </a>
         </div>
-      </div>
+      </header>
 
       <ErrorBanner message={failure} onRetry={reload} />
       {message && (
@@ -359,44 +704,20 @@ export default function DriverTrackingPage() {
           {message}
         </div>
       )}
-
-      {activeDelay?.status === "late" && (
-        <div className="alert alert-warning" role="status">
-          <strong>
-            {activeDelay.minutes} min behind plan
-            {activeDelay.stop_sequence ? ` · stop ${activeDelay.stop_sequence}` : ""}
-          </strong>
-          <p className="hint" style={{ margin: "4px 0 0" }}>
-            {activeDelay.reason} The Operations Center has been told.
-          </p>
-        </div>
-      )}
-      {activeDelay?.status === "awaiting_departure" && activeDelay.planned_at && (
-        <p className="hint">
-          Planned departure {formatDateTime(activeDelay.planned_at)} — confirm the
-          actual departure when the vehicle rolls.
-        </p>
-      )}
-
       {!online && (
         <div className="alert alert-warning" role="status">
-          No network. Positions are being kept on this phone and will be sent when the
-          signal returns.
+          No network. Positions are being kept on this phone and will be sent when
+          the signal returns.
         </div>
-      )}
-      {queued > 0 && (
-        <p className="hint">
-          {queued} position{queued === 1 ? "" : "s"} waiting to send
-          {online ? "" : " — saved on this phone"}.
-        </p>
       )}
 
       {runs.length === 0 && (
         <div className="card">
           <div className="card-body">
             <p>
-              The Operations Center has not opened movement tracking for this mission yet.
-              Ask them to dispatch the mission, or to press “Start movement tracking”.
+              The Operations Center has not opened movement tracking for this mission
+              yet. Ask them to dispatch the mission, or to press “Start movement
+              tracking”.
             </p>
           </div>
         </div>
@@ -406,28 +727,363 @@ export default function DriverTrackingPage() {
         <div className="card">
           <div className="card-body">
             <p>
-              You are not the designated driver of a vehicle on this mission. The board is
-              read-only for you.
+              You are not the designated driver of a vehicle on this mission. The
+              board is read-only for you.
             </p>
           </div>
         </div>
       )}
 
-      {runs.length > 0 && (
-        <div className="driver-grid">
-          {runs.map((run) => {
-            const mine = String(run.driver) === String(user?.id);
-            const editable =
-              run.status === "active" && (mine || data.can_manage || data.is_lead);
-            const delay = delays.find((row) => row.run === run.id) || null;
-            const stops = run.stops || [];
-            return (
+      {activeRun ? (
+        <div className="driver-stage">
+          <div className="driver-map">
+            <MapContainer
+              center={mapPoints[0] || DEFAULT_CENTER}
+              zoom={mapPoints.length ? 13 : 6}
+              zoomControl={false}
+              scrollWheelZoom
+            >
+              <DriverAttribution hostRef={attributeHost} />
+              <MapBasemapLayer
+                basemap={basemap}
+                onError={() => setBasemapFailure(basemap?.id || "")}
+              />
+              <DriverMapFit
+                points={mapPoints}
+                revision={`${expanded}:${route.length}:${sheetOpen}`}
+              />
+              <DriverRecenter point={selfPoint} token={focusToken} />
+
+              {route.length > 1 && (
+                <>
+                  <Polyline
+                    positions={route}
+                    pathOptions={{ color: "#ffffff", weight: 11, opacity: 0.85 }}
+                  />
+                  <Polyline
+                    positions={route}
+                    pathOptions={{ color: "#2563eb", weight: 6, opacity: 0.95 }}
+                  />
+                </>
+              )}
+              {trail.length > 1 && (
+                <Polyline
+                  positions={trail}
+                  pathOptions={{ color: "#22c55e", weight: 5, opacity: 0.9 }}
+                />
+              )}
+
+              {activeStops.map((stop, index) => {
+                if (stop.latitude == null || stop.longitude == null) return null;
+                const isNext = nextStop?.id === stop.id;
+                return (
+                  <Marker
+                    key={`stop-${stop.id}`}
+                    position={[stop.latitude, stop.longitude]}
+                    icon={stopPin(stop, isNext, index === activeStops.length - 1)}
+                    zIndexOffset={isNext ? 600000 : 400000}
+                  >
+                    <Tooltip direction="top" offset={[0, -14]}>
+                      {stop.sequence}. {stop.location_name}
+                    </Tooltip>
+                    <Popup>
+                      <strong>
+                        {stop.sequence}. {stop.location_name}
+                      </strong>
+                      <br />
+                      {stop.status === "departed"
+                        ? "Departed"
+                        : stop.status === "arrived"
+                          ? "Arrived"
+                          : "Not reached yet"}
+                      <br />
+                      Planned {formatDateTime(stop.planned_arrival || stop.planned_departure)}
+                    </Popup>
+                  </Marker>
+                );
+              })}
+
+              {selfPoint && (
+                <Marker position={selfPoint} icon={SELF_ICON} zIndexOffset={700000}>
+                  <Popup>
+                    <strong>Your position</strong>
+                    <br />
+                    {selfPoint[0].toFixed(5)}, {selfPoint[1].toFixed(5)}
+                    {lastFix?.accuracy ? ` · ±${Math.round(lastFix.accuracy)} m` : ""}
+                  </Popup>
+                </Marker>
+              )}
+            </MapContainer>
+
+            <div className="driver-map-top">
+              <div className="driver-attribution" ref={attributeHost} />
+              <div className="driver-map-pills">
+                <span
+                  className={`driver-pill ${
+                    streaming && gpsState === "live" ? "is-live" : "is-off"
+                  }`}
+                >
+                  {GPS_LABELS[gpsState] || "GPS off"}
+                </span>
+                {screenAwake && <span className="driver-pill is-awake">Screen on</span>}
+                {!online && <span className="driver-pill is-off">Offline</span>}
+                {queued > 0 && (
+                  <span className="driver-pill">
+                    {queued} position{queued === 1 ? "" : "s"} queued
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="driver-map-actions">
+              <button
+                type="button"
+                className="driver-map-button"
+                onClick={() => setFocusToken((value) => value + 1)}
+                aria-label="Centre the map on my position"
+                title="Centre on my position"
+              >
+                <LocateGlyph />
+              </button>
+              <button
+                type="button"
+                className="driver-map-button"
+                onClick={() => setExpanded((value) => !value)}
+                aria-label={expanded ? "Minimise the map" : "Maximise the map"}
+                title={expanded ? "Minimise the map" : "Maximise the map"}
+              >
+                <ExpandGlyph expanded={expanded} />
+              </button>
+            </div>
+
+            <aside
+              className={`driver-panel${sheetOpen ? " is-open" : ""}`}
+              aria-label="Trip details"
+            >
+              <button
+                type="button"
+                className="driver-sheet-handle"
+                aria-expanded={sheetOpen}
+                onClick={() => setSheetOpen((open) => !open)}
+              >
+                <span className="driver-sheet-grip" aria-hidden="true" />
+                <span className="driver-sheet-copy">
+                  <strong>
+                    {activeRun.registration_number}
+                    {activeRun.is_lead ? " · Lead" : ""}
+                  </strong>
+                  <span>
+                    {recordedStops}/{activeStops.length} stops ·{" "}
+                    {nextStop
+                      ? `Next: ${nextStop.location_name}`
+                      : "All stops recorded"}
+                  </span>
+                </span>
+                <span className="driver-sheet-toggle">
+                  {sheetOpen ? "Hide" : "Show"}
+                </span>
+              </button>
+
+              {sheetOpen && (
+                <div className="driver-sheet-body">
+                  {activeDelay?.status === "late" && (
+                    <div className="alert alert-warning" role="status">
+                      <strong>
+                        {activeDelay.minutes} min behind plan
+                        {activeDelay.stop_sequence
+                          ? ` · stop ${activeDelay.stop_sequence}`
+                          : ""}
+                      </strong>
+                      <p className="hint" style={{ margin: "4px 0 0" }}>
+                        {activeDelay.reason} The Operations Center has been told.
+                      </p>
+                    </div>
+                  )}
+
+                  {actionable.length > 1 && (
+                    <label className="field">
+                      <span>Vehicle</span>
+                      <select
+                        className="input"
+                        value={activeRunId ?? ""}
+                        onChange={(event) => {
+                          // Only discard breadcrumbs that belong to the run being
+                          // left.
+                          flush();
+                          queue.current = [];
+                          queueRun.current = Number(event.target.value);
+                          persist();
+                          setQueued(0);
+                          setActiveRunId(Number(event.target.value));
+                        }}
+                      >
+                        {actionable.map((run) => (
+                          <option key={run.id} value={run.id}>
+                            {run.registration_number}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  <section className="driver-next">
+                    <span className="driver-next-kicker">
+                      {nextStop
+                        ? nextIndex === 0
+                          ? "Departure point"
+                          : `Stop ${nextStop.sequence} of ${activeStops.length}`
+                        : "Itinerary"}
+                    </span>
+                    <h3>
+                      {nextStop ? nextStop.location_name : "Every stop is recorded"}
+                    </h3>
+                    <p className="driver-next-meta">
+                      {nextStop ? (
+                        <span>
+                          Planned{" "}
+                          {formatDateTime(
+                            nextStop.planned_arrival || nextStop.planned_departure
+                          )}
+                        </span>
+                      ) : null}
+                      {distanceToNext != null && (
+                        <span>{distanceToNext.toFixed(1)} km away</span>
+                      )}
+                      {awaitingDeparture && activeRun.etd ? (
+                        <span>ETD {formatDateTime(activeRun.etd)}</span>
+                      ) : null}
+                    </p>
+                    {primaryAction ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary driver-primary"
+                        onClick={primaryAction.onClick}
+                        disabled={Boolean(busy)}
+                      >
+                        {busy ? "Recording…" : primaryAction.label}
+                      </button>
+                    ) : (
+                      <p className="hint">
+                        {editable
+                          ? "Waiting for the previous movement to be recorded."
+                          : "This run is read-only for you."}
+                      </p>
+                    )}
+                  </section>
+
+                  <section className="driver-gps-card">
+                    <div className="driver-gps-head">
+                      <h3>Live position</h3>
+                      <span
+                        className={`badge ${
+                          streaming ? "badge-success" : "badge-muted"
+                        }`}
+                      >
+                        {streaming ? "Sharing" : "Off"}
+                      </span>
+                    </div>
+                    <p className="hint">
+                      {lastFix
+                        ? `${lastFix.latitude.toFixed(5)}, ${lastFix.longitude.toFixed(
+                            5
+                          )}${lastFix.accuracy ? ` · ±${Math.round(lastFix.accuracy)} m` : ""}`
+                        : "Waiting for the first GPS fix."}
+                    </p>
+
+                    <button
+                      type="button"
+                      className="driver-switch"
+                      role="switch"
+                      aria-checked={keepAwake}
+                      onClick={() => setKeepAwake((value) => !value)}
+                    >
+                      <span className="driver-switch-copy">
+                        <strong>Keep screen awake</strong>
+                        <span className="hint">
+                          Stops the phone sleeping while the position is shared.
+                        </span>
+                      </span>
+                      <span className="driver-switch-track" aria-hidden="true">
+                        <span />
+                      </span>
+                    </button>
+                    {screenAwake && (
+                      <p className="hint">The screen is being kept awake.</p>
+                    )}
+                    {!wakeSupported && streaming && keepAwake && (
+                      <p className="field-message">
+                        This browser cannot hold the screen awake. Set the phone's
+                        auto-lock to Never while driving.
+                      </p>
+                    )}
+
+                    {gpsError && <p className="field-message">{gpsError}</p>}
+
+                    <div className="driver-actions-row">
+                      {streaming ? (
+                        <>
+                          <Button variant="ghost" onClick={() => setStreaming(false)}>
+                            Stop sharing
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={flush}
+                            disabled={!online}
+                          >
+                            Send now
+                          </Button>
+                        </>
+                      ) : (
+                        <Button onClick={() => setStreaming(true)}>
+                          Start sharing position
+                        </Button>
+                      )}
+                    </div>
+                    <p className="hint">
+                      Browsers only allow location on HTTPS or localhost. On a
+                      phone, open TOWEMS from its HTTPS address, not a bare IP over
+                      HTTP.
+                    </p>
+                  </section>
+
+                  <section>
+                    <h3 className="driver-section-title">Stops</h3>
+                    <StopTimeline stops={activeStops} />
+                  </section>
+
+                  <div className="driver-map-style">
+                    <span className="hint">Map style</span>
+                    <BasemapControl
+                      config={config.data}
+                      value={basemap?.id}
+                      onChange={chooseBasemap}
+                      compact
+                    />
+                  </div>
+                  {basemapFailure && (
+                    <p className="field-message">
+                      The selected basemap could not be reached. Choose another map
+                      style; the route is unaffected.
+                    </p>
+                  )}
+                </div>
+              )}
+            </aside>
+          </div>
+        </div>
+      ) : (
+        runs.length > 0 && (
+          <div className="driver-grid">
+            {runs.map((run) => (
               <section className="card driver-run" key={run.id}>
                 <header className="card-head">
                   <div>
                     <h2>
                       {run.registration_number}
-                      {run.is_lead ? <span className="badge badge-info">Lead</span> : null}
+                      {run.is_lead ? (
+                        <span className="badge badge-info">Lead</span>
+                      ) : null}
                     </h2>
                     <p className="hint">
                       {run.vehicle_type} · {run.driver_name || "No driver"} ·{" "}
@@ -451,102 +1107,8 @@ export default function DriverTrackingPage() {
                         ) : null}
                       </dd>
                     </div>
-                    {delay?.status === "late" && (
-                      <div className="detail">
-                        <dt>Behind plan</dt>
-                        <dd>{delay.minutes} min</dd>
-                      </div>
-                    )}
                   </dl>
-
-                  {editable && run.atd_source !== "driver" && (
-                    <Button
-                      onClick={() => record(run, "depart")}
-                      disabled={busy === `${run.id}:depart:`}
-                    >
-                      {busy === `${run.id}:depart:`
-                        ? "Recording…"
-                        : "Confirm actual departure"}
-                    </Button>
-                  )}
-
-                  <ol className="stop-timeline">
-                    {stops.map((stop, index) => {
-                      const isOrigin = index === 0;
-                      const isFinal = index === stops.length - 1;
-                      const previous = index > 0 ? stops[index - 1] : null;
-                      // Stop 1 is the departure point: its wheel-roll is the
-                      // run's departure confirmation, not an arrival. Each
-                      // later arrival waits for the previous departure.
-                      const canArrive =
-                        editable &&
-                        !isOrigin &&
-                        stop.status === "pending" &&
-                        previous?.status === "departed";
-                      const canDepart =
-                        editable && !isFinal && stop.status === "arrived";
-                      const planned = isOrigin
-                        ? stop.planned_departure || stop.planned_arrival
-                        : stop.planned_arrival;
-                      return (
-                        <li key={stop.id} className={`stop-row stop-${stop.status}`}>
-                          <div className="stop-copy">
-                            <strong>
-                              {stop.sequence}. {stop.location_name}
-                            </strong>
-                            <p className="hint">
-                              Planned {isOrigin ? "departure" : "arrival"}{" "}
-                              {formatDateTime(planned)}
-                              {stop.arrived_at
-                                ? ` · Arrived ${formatDateTime(stop.arrived_at)}`
-                                : ""}
-                              {stop.departed_at
-                                ? ` · Departed ${formatDateTime(stop.departed_at)}`
-                                : ""}
-                            </p>
-                            {isOrigin && stop.status === "pending" && (
-                              <p className="hint">
-                                Confirm the actual departure above before marking the
-                                next stop.
-                              </p>
-                            )}
-                          </div>
-                          {canArrive && (
-                            <Button
-                              size="sm"
-                              onClick={() => record(run, "arrive_stop", stop)}
-                              disabled={Boolean(busy)}
-                            >
-                              Arrived
-                            </Button>
-                          )}
-                          {canDepart && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => record(run, "depart_stop", stop)}
-                              disabled={Boolean(busy)}
-                            >
-                              Depart
-                            </Button>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ol>
-
-                  {editable &&
-                    stops.length > 0 &&
-                    stops.every((stop) => stop.status !== "pending") && (
-                      <Button
-                        variant="ghost"
-                        onClick={() => record(run, "complete")}
-                        disabled={Boolean(busy)}
-                      >
-                        Complete this vehicle's run
-                      </Button>
-                    )}
-
+                  <StopTimeline stops={run.stops || []} />
                   {run.last_ping_at && (
                     <p className="hint">
                       Last position {formatDateTime(run.last_ping_at)} ·{" "}
@@ -555,90 +1117,44 @@ export default function DriverTrackingPage() {
                   )}
                 </div>
               </section>
-            );
-          })}
-        </div>
-      )}
-
-      {activeRun && actionable.length > 0 && !stale && (
-        <section className="card driver-gps">
-          <header className="card-head">
-            <h2>Live position</h2>
-            <span className={`badge badge-${gpsState === "live" ? "success" : "muted"}`}>
-              {gpsState === "live"
-                ? "Streaming"
-                : gpsState === "locating"
-                  ? "Finding GPS…"
-                  : gpsState === "offline"
-                    ? "Waiting for network"
-                    : gpsState === "error"
-                      ? "Not sending"
-                      : "Off"}
-            </span>
-          </header>
-          <div className="card-body">
-            <p className="hint">
-              Your phone's GPS is sent to the Operations Center while this page is open.
-              Positions are saved on the phone, so a dead spot or a locked screen does not
-              lose them — keep the page open and the screen will stay awake.
-            </p>
-            {actionable.length > 1 && (
-              <label className="field">
-                <span>Vehicle</span>
-                <select
-                  className="input"
-                  value={activeRunId ?? ""}
-                  onChange={(event) => {
-                    // Only discard breadcrumbs that belong to the run being left.
-                    flush();
-                    queue.current = [];
-                    queueRun.current = Number(event.target.value);
-                    persist();
-                    setQueued(0);
-                    setActiveRunId(Number(event.target.value));
-                  }}
-                >
-                  {actionable.map((run) => (
-                    <option key={run.id} value={run.id}>
-                      {run.registration_number}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {lastFix && (
-              <p className="hint">
-                {lastFix.latitude.toFixed(5)}, {lastFix.longitude.toFixed(5)}
-                {lastFix.accuracy ? ` · ±${Math.round(lastFix.accuracy)} m` : ""}
-              </p>
-            )}
-            {screenAwake && <p className="hint">Screen is being kept awake.</p>}
-            {gpsError && <p className="field-message">{gpsError}</p>}
-            <div className="btn-row">
-              {streaming ? (
-                <>
-                  <Button variant="ghost" onClick={() => setStreaming(false)}>
-                    Stop sharing position
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={flush} disabled={!online}>
-                    Send now
-                  </Button>
-                </>
-              ) : (
-                <Button onClick={() => setStreaming(true)}>Start sharing position</Button>
-              )}
-            </div>
-            <p className="hint">
-              Browsers only allow location on HTTPS or localhost. On a phone, open TOWEMS from
-              its HTTPS address, not a bare IP over HTTP.
-            </p>
+            ))}
           </div>
-        </section>
+        )
       )}
 
-      <p className="hint">
-        <Link to={`/missions/${mission.id}/track`}>Open the convoy map</Link>
-      </p>
-    </>
+      <div className="driver-below">
+        {activeRun && (
+          <dl className="details driver-details">
+            <div className="detail">
+              <dt>Vehicle</dt>
+              <dd>
+                {activeRun.registration_number} · {activeRun.driver_name || "No driver"}
+                {activeRun.atd_source_label ? ` · ${activeRun.atd_source_label}` : ""}
+              </dd>
+            </div>
+            <div className="detail">
+              <dt>ETD (planned)</dt>
+              <dd>{formatDateTime(activeRun.etd)}</dd>
+            </div>
+            <div className="detail">
+              <dt>ATD (actual)</dt>
+              <dd>{formatDateTime(activeRun.atd)}</dd>
+            </div>
+            {activeRun.last_ping_at && (
+              <div className="detail">
+                <dt>Last position</dt>
+                <dd>
+                  {formatDateTime(activeRun.last_ping_at)} ·{" "}
+                  {activeRun.is_live ? "live" : "stale"}
+                </dd>
+              </div>
+            )}
+          </dl>
+        )}
+        <p className="hint">
+          <Link to={`/missions/${mission.id}/track`}>Open the convoy map</Link>
+        </p>
+      </div>
+    </div>
   );
 }

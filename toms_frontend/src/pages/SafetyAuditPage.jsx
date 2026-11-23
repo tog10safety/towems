@@ -18,7 +18,7 @@ import {
 import PdfViewer from "../components/PdfViewer.jsx";
 import SafetyAuditChart from "../components/SafetyAuditChart.jsx";
 import { useApi } from "../hooks/useApi.js";
-import { formatDate } from "../utils/format.js";
+import { formatDate, formatDateRange } from "../utils/format.js";
 
 const PAGE_SIZE = 20;
 
@@ -44,12 +44,9 @@ function localDateInput(date = new Date()) {
 
 function coveredDates(row) {
   if (!row.date_covered_start && !row.date_covered_end) {
-    return row.date_created ? formatDate(row.date_created) : "—";
+    return formatDateRange(row.date_created, row.date_created);
   }
-  if (row.date_covered_start && row.date_covered_end) {
-    return `${formatDate(row.date_covered_start)} – ${formatDate(row.date_covered_end)}`;
-  }
-  return formatDate(row.date_covered_start || row.date_covered_end);
+  return formatDateRange(row.date_covered_start, row.date_covered_end);
 }
 
 function riskTone(category) {

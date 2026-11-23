@@ -80,6 +80,18 @@ export function formatDate(value) {
   return `${pad(parts.day)} ${MONTHS[parts.month - 1]} ${parts.year}`;
 }
 
+/**
+ * ``18 Nov 2026 – 19 Nov 2026`` for a window that spans days, and the single
+ * date when the start and end fall on the same day.
+ */
+export function formatDateRange(start, end) {
+  if (!start && !end) return "—";
+  if (!start || !end) return formatDate(start || end);
+  const first = formatDate(start);
+  const last = formatDate(end);
+  return first === last ? first : `${first} – ${last}`;
+}
+
 /** ``1430H`` */
 export function formatTime(value) {
   const parts = manilaParts(value);

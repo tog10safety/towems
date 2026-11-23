@@ -9,6 +9,7 @@ import secrets
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth import update_session_auth_hash
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -20,7 +21,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts import ownership
+from apps.accounts import mfa, ownership, setup_gate
 from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, User
 from apps.accounts.models import PasswordResetToken
 from apps.accounts.serializers import (
@@ -28,6 +29,8 @@ from apps.accounts.serializers import (
     AdminUserUpdateSerializer,
     ChangePasswordSerializer,
     LoginSerializer,
+    MFACodeSerializer,
+    MFAChallengeSerializer,
     PasswordResetCompleteSerializer,
     PersonnelWriteSerializer,
     UserSummarySerializer,
@@ -43,6 +46,8 @@ from apps.core.permissions import (
     IsUserAdministrator,
 )
 from apps.core.scoping import accessible_unit_ids, unit_ids_for_filter
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 
 def _preferences(user) -> dict:
@@ -148,6 +153,61 @@ def _permissions_payload(user) -> dict:
     return roles.permissions_payload(user)
 
 
+def _user_payload(request, user) -> dict:
+    """The signed-in account payload shared by login, /me and MFA verification."""
+    payload = UserSummarySerializer(user, context={"request": request}).data
+    payload["permissions"] = _permissions_payload(user)
+    payload["preferences"] = _preferences(user)
+    from apps.accounts.profile import avatar_url
+
+    payload["avatar_url"] = avatar_url(user)
+    payload["password_change_required"] = user.needs_password_change()
+    payload["accessible_units"] = sorted(accessible_unit_ids(user))
+    # First-sign-in gates: the profile refresh, then authenticator enrolment.
+    payload.update(setup_gate.status_payload(user, request))
+    return payload
+
+
+def _complete_login(
+    request,
+    user,
+    *,
+    verified: bool = True,
+    enrollment_required: bool = False,
+) -> dict:
+    """Create the session and write both audit trails.
+
+    ``verified=False`` marks a session whose second factor has not been
+    presented yet. ``setup_gate`` then decides which first-sign-in gate the
+    session is in: the profile refresh, or authenticator enrolment once the
+    profile is complete.
+    """
+    login(request, user)
+    session = request.session
+    session["mfa_verified"] = verified
+    if enrollment_required:
+        session["mfa_enrollment_required"] = True
+    else:
+        session.pop("mfa_enrollment_required", None)
+    setup_gate.sync_session(user, session)
+
+    log_action(
+        actor=user,
+        action="login",
+        entity_type="auth",
+        entity_id=user.id,
+        request=request,
+    )
+    record_activity(
+        user=user,
+        activity_type="login",
+        module="auth",
+        description=f"{user.username} signed in",
+        request=request,
+    )
+    return _user_payload(request, user)
+
+
 class CsrfTokenView(APIView):
     """Seed the CSRF cookie for the SPA before any POST."""
 
@@ -180,31 +240,148 @@ class LoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        login(request, user)
-        log_action(
-            actor=user,
-            action="login",
-            entity_type="auth",
-            entity_id=user.id,
-            request=request,
-        )
-        record_activity(
-            user=user,
-            activity_type="login",
-            module="auth",
-            description=f"{user.username} signed in",
-            request=request,
-        )
-        payload = UserSummarySerializer(user).data
-        payload["permissions"] = _permissions_payload(user)
-        payload["preferences"] = _preferences(user)
-        # Same picture the shell shows beside the user name; without it the
-        # avatar only appeared after the next /auth/me/ refresh.
-        from apps.accounts.profile import avatar_url
+        state = mfa.get_state(user)
 
-        payload["avatar_url"] = avatar_url(user)
-        payload["password_change_required"] = user.needs_password_change()
-        payload["accessible_units"] = sorted(accessible_unit_ids(user))
+        # An enrolled account never receives a session from the password alone.
+        if mfa.is_enabled(state):
+            return Response(
+                {
+                    "mfa_required": True,
+                    "challenge": mfa.issue_challenge(user),
+                    "expires_in": mfa.CHALLENGE_MAX_AGE,
+                    "username": user.username,
+                    "recovery_codes_remaining": mfa.recovery_codes_remaining(state),
+                }
+            )
+
+        # Every active account presents a second factor. An unenrolled account
+        # is held in the first-sign-in setup flow: the profile refresh first,
+        # then Google Authenticator enrolment, with no grace period.
+        if mfa.requires_mfa(user):
+            mfa.ensure_state(user)
+            return Response(
+                _complete_login(
+                    request, user, verified=False, enrollment_required=True
+                )
+            )
+
+        return Response(_complete_login(request, user))
+
+
+class MFAChallengeView(APIView):
+    """Exchange a password challenge plus a TOTP/recovery code for a session."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    throttle_scope = "login"
+
+    def post(self, request):
+        enforce_csrf(request)
+        serializer = MFAChallengeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = mfa.read_challenge(serializer.validated_data["challenge"])
+        state = mfa.get_state(user) if user is not None else None
+        if user is None or not mfa.is_enabled(state):
+            return Response(
+                {
+                    "detail": "This sign-in challenge is invalid or has expired. Sign in again.",
+                    "errors": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        recovery = serializer.validated_data["recovery"]
+        if not mfa.verify_login_code(
+            state, serializer.validated_data["code"], recovery=recovery
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "That recovery code is not valid or has already been used."
+                        if recovery
+                        else "That authenticator code is not valid."
+                    ),
+                    "errors": {},
+                },
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if recovery:
+            log_action(
+                actor=user,
+                action="mfa_recovery_login",
+                entity_type="auth",
+                entity_id=user.id,
+                note="Signed in with a one-time recovery code",
+                request=request,
+            )
+        payload = _complete_login(request, user)
+        payload["used_recovery_code"] = recovery
+        return Response(payload)
+
+
+class MFAStatusView(APIView):
+    """Enrolment state for the current account, used by the setup page."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        payload = mfa.status_payload(request.user, request)
+        payload["setup_available"] = payload["mfa_required"] and not payload["mfa_enabled"]
+        return Response(payload)
+
+
+class MFASetupView(APIView):
+    """Start (or resume) enrolment by returning a fresh provisioning secret."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "login"
+
+    def post(self, request):
+        enforce_csrf(request)
+        if not mfa.requires_mfa(request.user):
+            return Response(
+                {"detail": "Multi-factor authentication is not required for this account.", "errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            payload = mfa.begin_setup(request.user)
+        except mfa.MFAError as exc:
+            return Response(
+                {"detail": str(exc), "errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payload.update(mfa.status_payload(request.user, request))
+        return Response(payload)
+
+
+class MFAVerifySetupView(APIView):
+    """Confirm the first authenticator code and show recovery codes once."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "login"
+
+    def post(self, request):
+        enforce_csrf(request)
+        serializer = MFACodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            codes = mfa.complete_setup(
+                request.user,
+                serializer.validated_data["code"],
+            )
+        except mfa.MFAError as exc:
+            return Response(
+                {"detail": str(exc), "errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        request.session["mfa_verified"] = True
+        request.session.pop("mfa_setup_required", None)
+        request.session.pop("mfa_enrollment_required", None)
+        payload = _user_payload(request, request.user)
+        payload["recovery_codes"] = codes
         return Response(payload)
 
 
@@ -227,22 +404,55 @@ class LogoutView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class SetupAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Issue an API token only to an account that has finished its setup.
+
+    Token clients never pass through :class:`MFAEnforcementMiddleware`, so the
+    first-sign-in gates have to be enforced here. Without this, a password alone
+    buys a JWT that skips the profile refresh and Google Authenticator
+    enrolment entirely.
+    """
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        user = self.user
+        gaps = setup_gate.profile_gaps(user)
+        if gaps:
+            raise PermissionDenied(
+                {
+                    "detail": (
+                        "Finish your account setup (new password, picture, "
+                        "signature and Gmail account) before using API tokens."
+                    ),
+                    "code": "profile_setup_required",
+                    "gaps": gaps,
+                }
+            )
+        if setup_gate.mfa_outstanding(user):
+            raise PermissionDenied(
+                {
+                    "detail": (
+                        "Set up Google Authenticator before using API tokens."
+                    ),
+                    "code": "mfa_setup_required",
+                }
+            )
+        return data
+
+
+class SetupAwareTokenObtainPairView(TokenObtainPairView):
+    serializer_class = SetupAwareTokenObtainPairSerializer
+
+
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        data = UserSummarySerializer(user).data
-        data["permissions"] = _permissions_payload(user)
-        data["preferences"] = _preferences(user)
-        # The shell shows the person's picture beside their name; the picture
-        # itself is served by the avatar endpoint, which enforces ownership.
-        from apps.accounts.profile import avatar_url
-
-        data["avatar_url"] = avatar_url(user)
-        data["password_change_required"] = user.needs_password_change()
-        data["accessible_units"] = sorted(accessible_unit_ids(user))
-        return Response(data)
+        # Recomputed here so a finished setup step clears its gate on the next
+        # page load instead of persisting until the session expires.
+        setup_gate.sync_session(user, getattr(request, "session", None))
+        return Response(_user_payload(request, user))
 
 
 class ChangePasswordView(APIView):
@@ -263,6 +473,7 @@ class ChangePasswordView(APIView):
         user.set_password(serializer.validated_data["new_password"])
         user.save()
         update_session_auth_hash(request, user)
+        setup_gate.sync_session(user, getattr(request, "session", None))
         log_action(
             actor=user,
             action="change_password",
@@ -407,7 +618,7 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ["last_name", "first_name"]
 
     def get_queryset(self):
-        return (
+        queryset = (
             User.objects.all()
             .select_related("unit", "profile")
             .prefetch_related(
@@ -416,6 +627,39 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
                 "section_assignments__section__unit",
             )
         )
+        return self._filter_setup(queryset)
+
+    def _filter_setup(self, queryset):
+        """``?setup=`` narrows the register to accounts that still owe a step.
+
+        ``profile``      the deployment profile refresh is not finished
+        ``mfa``          the authenticator is not enrolled on a rollout account
+        ``outstanding``  either of the above (the chase list)
+
+        The MFA clause mirrors :func:`apps.accounts.setup_gate.mfa_outstanding`:
+        an account flagged for the refresh, or one that has finished it, must
+        carry a second factor before it can use TOWEMS.
+        """
+        mode = (self.request.query_params.get("setup") or "").strip().lower()
+        if mode not in {"profile", "mfa", "outstanding"}:
+            return queryset
+
+        refresh_due = Q(
+            profile__onboarding_required=True,
+            profile__onboarding_completed_at__isnull=True,
+        )
+        in_rollout = Q(profile__onboarding_required=True) | Q(
+            profile__onboarding_completed_at__isnull=False
+        )
+        mfa_due = Q(mfa__enabled_at__isnull=True) & in_rollout
+
+        if mode == "profile":
+            condition = refresh_due
+        elif mode == "mfa":
+            condition = mfa_due
+        else:
+            condition = refresh_due | mfa_due
+        return queryset.filter(is_active=True).filter(condition).distinct()
 
     def _snapshot(self, user) -> dict:
         return {
@@ -696,6 +940,32 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
                 "expires_at": token.expires_at,
                 "username": target.username,
             }
+        )
+
+    @action(detail=True, methods=["post"], url_path="reset-mfa")
+    def reset_mfa(self, request, pk=None):
+        """Clear a privileged account's TOTP enrolment and restart its window.
+
+        The reason is mandatory and lands in both audit trails. The account can
+        enrol again without waiting for an administrator, but only inside a new
+        14-day window; after that it is setup-only until it does.
+        """
+        enforce_csrf(request)
+        target = self.get_object()
+        reason = (request.data.get("reason") or "").strip()
+        try:
+            mfa.reset_for_user(
+                target,
+                actor=request.user,
+                reason=reason,
+                request=request,
+            )
+        except mfa.MFAError as exc:
+            raise ValidationError({"reason": str(exc)})
+
+        target = self.get_queryset().get(pk=target.pk)
+        return Response(
+            AdminUserSerializer(target, context={"request": request}).data
         )
 
 

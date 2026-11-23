@@ -26,6 +26,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts import mfa, setup_gate
 from apps.accounts.models import UserProfile
 from apps.accounts.personnel_details import (
     PERSONNEL_DETAIL_FIELDS,
@@ -97,6 +98,13 @@ def _read_upload(request, field: str) -> tuple[bytes, str]:
 
 def _profile_for(user) -> UserProfile:
     profile, _created = UserProfile.objects.get_or_create(user_id=user.id)
+    # Point the reverse one-to-one cache at the row just read, so a stale
+    # instance created earlier in the same request cannot leak into the
+    # response the caller sees right after saving.
+    try:
+        user._state.fields_cache["profile"] = profile
+    except Exception:  # noqa: BLE001 - cache layout is an implementation detail
+        pass
     return profile
 
 
@@ -166,6 +174,9 @@ def profile_payload(user) -> dict:
         for row in user.appointments.select_related("unit").filter(is_active=True)
     ]
 
+    setup_gaps = setup_gate.profile_gaps(user)
+    mfa_state = mfa.get_state(user)
+
     return {
         "id": user.id,
         "username": user.username,
@@ -193,6 +204,12 @@ def profile_payload(user) -> dict:
         "preferences": preferences_payload(user),
         "password_expiry_date": user.password_expiry_date,
         "password_change_required": user.needs_password_change(),
+        "profile_setup_gaps": setup_gaps,
+        "profile_setup_gap_labels": setup_gate.gap_labels(setup_gaps),
+        "profile_email_suffix": setup_gate.required_email_suffix(),
+        #: The account the authenticator entry was created under. Shown next to
+        #: the profile address so a mismatch is visible at a glance.
+        "authenticator_account": (mfa_state.account or "") if mfa_state else "",
     }
 
 
@@ -222,6 +239,18 @@ class ProfileView(APIView):
                         "These fields cannot be changed through the profile: "
                         + ", ".join(rejected)
                         + ". Contact an administrator for role or unit changes."
+                    )
+                }
+            )
+
+        email = request.data.get("email")
+        if email is not None and (email or "").strip() and not setup_gate.email_ok(email):
+            suffix = setup_gate.required_email_suffix()
+            raise ValidationError(
+                {
+                    "email": (
+                        "Use the Google (Gmail) account you will sign in with"
+                        + (f"; it must end with {suffix}." if suffix else ".")
                     )
                 }
             )
@@ -270,6 +299,7 @@ class ProfileView(APIView):
                 changed[field] = value.isoformat() if hasattr(value, "isoformat") else value
 
         profile.save()
+        setup_gate.sync_session(user, getattr(request, "session", None))
 
         after = {
             "contact_number": user.contact_number or "",
@@ -348,17 +378,19 @@ class OnboardingCompleteView(APIView):
         user = request.user
         profile = _profile_for(user)
 
-        if user.needs_password_change():
+        # One rule set, shared with the request gate and the profile page, so
+        # the four required steps cannot drift apart.
+        gaps = setup_gate.profile_gaps(user)
+        if gaps:
             raise ValidationError(
-                {"detail": "Change the initial password before finishing setup."}
-            )
-        if not (profile.avatar_filename or ""):
-            raise ValidationError(
-                {"detail": "Upload a profile picture before finishing setup."}
-            )
-        if not _safe_name(user.signature_filename or ""):
-            raise ValidationError(
-                {"detail": "Upload your signature before finishing setup."}
+                {
+                    "detail": (
+                        "Complete these steps before finishing setup: "
+                        + ", ".join(setup_gate.gap_labels(gaps))
+                        + "."
+                    ),
+                    "gaps": gaps,
+                }
             )
 
         if profile.onboarding_required or not profile.onboarding_completed_at:
@@ -379,6 +411,8 @@ class OnboardingCompleteView(APIView):
                 request=request,
             )
 
+        # The profile is complete: the session moves on to authenticator setup.
+        setup_gate.sync_session(user, getattr(request, "session", None))
         return Response(profile_payload(user))
 
 
@@ -407,6 +441,7 @@ class ProfileAvatarView(APIView):
         profile.avatar_filename = filename
         profile.avatar_content_type = f"image/{extension}"
         profile.save(update_fields=["avatar_filename", "avatar_content_type", "updated_at"])
+        setup_gate.sync_session(request.user, getattr(request, "session", None))
 
         # Remove only files this endpoint created for this user.
         if previous and previous != filename and previous.startswith(f"avatar_{request.user.id}_"):
@@ -433,6 +468,7 @@ class ProfileAvatarView(APIView):
         profile.avatar_filename = ""
         profile.avatar_content_type = ""
         profile.save(update_fields=["avatar_filename", "avatar_content_type", "updated_at"])
+        setup_gate.sync_session(request.user, getattr(request, "session", None))
         if previous and previous.startswith(f"avatar_{request.user.id}_"):
             try:
                 (avatar_directory() / previous).unlink(missing_ok=True)
@@ -469,6 +505,7 @@ class ProfileSignatureView(APIView):
         user = request.user
         user.signature_filename = filename
         user.save(update_fields=["signature_filename"])
+        setup_gate.sync_session(user, getattr(request, "session", None))
         log_action(
             actor=user,
             action="update_profile_signature",
@@ -485,6 +522,7 @@ class ProfileSignatureView(APIView):
         user = request.user
         user.signature_filename = None
         user.save(update_fields=["signature_filename"])
+        setup_gate.sync_session(user, getattr(request, "session", None))
         log_action(
             actor=user,
             action="remove_profile_signature",

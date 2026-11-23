@@ -24,6 +24,7 @@ import BasemapControl from "./map/BasemapControl.jsx";
 import MapBasemapLayer from "./map/MapBasemapLayer.jsx";
 import Icon from "./Icon.jsx";
 import { formatDateTime, formatTime } from "../utils/format.js";
+import { legRouteLabel } from "../utils/airRoute.js";
 
 const DEFAULT_CENTER = [12.8797, 121.774];
 const POLL_MS = 10000;
@@ -38,6 +39,7 @@ const STATUS_ORDER = [
   "unavailable",
   "timing_missing",
   "arrived",
+  "landed",
   "cancelled",
 ];
 
@@ -45,6 +47,7 @@ const STATUS_COLORS = {
   planned: "#94a3b8",
   en_route: "#22c55e",
   arrived: "#3fb950",
+  landed: "#94a3b8",
   on_hold: "#eab308",
   cancelled: "#8b949e",
   delayed: "#f97316",
@@ -117,6 +120,59 @@ function PopupRow({ label, children }) {
     <div className="air-sim-popup-row">
       <dt>{label}</dt>
       <dd>{children}</dd>
+    </div>
+  );
+}
+
+function LegPopup({ row, leg, previous }) {
+  const landed = Boolean(leg.overflight ? leg.toot : leg.ata);
+  const airborne = Boolean(!landed && (leg.atd || leg.tot));
+  const cancelled = leg.status === "cancelled";
+  const tone = cancelled
+    ? "cancelled"
+    : landed
+      ? "arrived"
+      : airborne
+        ? "en_route"
+        : "planned";
+  const toneLabel = cancelled
+    ? "Cancelled"
+    : landed
+      ? "Landed"
+      : airborne
+        ? "Airborne"
+        : "Planned";
+  return (
+    <div className="air-sim-popup">
+      <div className="air-sim-popup-head">
+        <strong>
+          Leg {leg.sequence} · {row.tail_number || row.callsign || "Aircraft"}
+        </strong>
+        <span className={`air-sim-status status-${tone}`}>{toneLabel}</span>
+      </div>
+      <p className="air-sim-popup-sim">
+        {row.mission_number || "No mission"} · itinerary leg details
+      </p>
+      <dl>
+        <PopupRow label="Route">{legRouteLabel(leg, previous)}</PopupRow>
+        <PopupRow label="Origin">{leg.origin || "—"}</PopupRow>
+        <PopupRow label="Destination">{leg.destination || "—"}</PopupRow>
+        <PopupRow label="Leg task">{leg.mission || "—"}</PopupRow>
+        <PopupRow label="ETD">{formatDateTime(leg.etd)}</PopupRow>
+        <PopupRow label="ETA">{formatDateTime(leg.eta)}</PopupRow>
+        <PopupRow label={leg.overflight ? "TOT" : "Actual takeoff"}>
+          {formatDateTime(leg.overflight ? leg.tot : leg.atd)}
+        </PopupRow>
+        <PopupRow label={leg.overflight ? "TOOT" : "Actual landing"}>
+          {formatDateTime(leg.overflight ? leg.toot : leg.ata)}
+        </PopupRow>
+        {leg.overflight ? (
+          <PopupRow label="Leg type">Overflight</PopupRow>
+        ) : null}
+        {leg.return_to_origin ? (
+          <PopupRow label="Leg type">Return to origin</PopupRow>
+        ) : null}
+      </dl>
     </div>
   );
 }
@@ -322,7 +378,8 @@ export default function AirSimulationMap({ date }) {
           <h3>Operational aircraft picture</h3>
           <p className="hint">
             Planned routes remain gray. The green segment is the simulated path
-            already flown. The map refreshes automatically every 10 seconds.
+            already flown. Click a leg on the map to see that itinerary leg's
+            details. The map refreshes automatically every 10 seconds.
           </p>
         </div>
         <div className="air-sim-head-actions">
@@ -398,6 +455,35 @@ export default function AirSimulationMap({ date }) {
                         }}
                       />
                     )}
+                    {!trackHidden &&
+                      (row.legs || []).map((leg, legListIndex, allLegs) => {
+                        if (!Array.isArray(leg.points) || leg.points.length < 2) {
+                          return null;
+                        }
+                        const previous =
+                          legListIndex > 0 ? allLegs[legListIndex - 1] : null;
+                        return (
+                          <Polyline
+                            key={`${row.id}-leg-${leg.id ?? legListIndex}`}
+                            positions={leg.points}
+                            pathOptions={{
+                              // A wide, effectively invisible line gives each
+                              // leg a comfortable click target without changing
+                              // how the route itself is drawn.
+                              color: PLANNED_COLOR,
+                              weight: 16,
+                              opacity: 0.01,
+                            }}
+                            eventHandlers={{
+                              click: () => setSelectedId(row.id),
+                            }}
+                          >
+                            <Popup maxWidth={340}>
+                              <LegPopup row={row} leg={leg} previous={previous} />
+                            </Popup>
+                          </Polyline>
+                        );
+                      })}
                     {!trackHidden && route[0] && (
                       <CircleMarker
                         center={route[0]}
@@ -486,7 +572,11 @@ export default function AirSimulationMap({ date }) {
                         {row.is_lead ? " · Lead" : ""}
                       </span>
                       <span className="air-sim-aircraft-route">
-                        {row.origin || "—"} → {row.destination || "—"}
+                        {row.current_leg
+                          ? `Leg ${row.current_leg.sequence} · ${
+                              row.current_leg.origin || "—"
+                            } → ${row.current_leg.destination || "—"}`
+                          : `${row.origin || "—"} → ${row.destination || "—"}`}
                       </span>
                       <span className="air-sim-progress">
                         <span style={{ width: `${row.progress_percent || 0}%` }} />
@@ -527,6 +617,7 @@ export default function AirSimulationMap({ date }) {
                 ["planned", "Planned"],
                 ["en_route", "En Route"],
                 ["arrived", "Arrived"],
+                ["landed", "Landed at stop"],
                 ["delayed", "Delayed"],
                 ["on_hold", "On Hold"],
                 ["cancelled", "Cancelled"],

@@ -351,3 +351,64 @@ class PasswordResetToken(models.Model):
 
     def __str__(self) -> str:
         return f"Reset token for user {self.user_id} (used={bool(self.used_at)})"
+
+
+class UserMFA(models.Model):
+    """TOTP enrolment state for one account.
+
+    Additive on purpose: the legacy ``users`` table is unmanaged and must not
+    gain columns. ``secret`` is only populated while enrolment is in progress
+    or after it completes; it is never returned once MFA is enabled.
+    """
+
+    user = models.OneToOneField(
+        "accounts.User",
+        db_column="user_id",
+        primary_key=True,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="mfa",
+    )
+    secret = models.CharField(max_length=64, blank=True, default="")
+    #: The Gmail address the authenticator entry was created under. Kept so an
+    #: administrator can see that the person enrolled a different account from
+    #: the one on their profile (a typo or someone else's address).
+    account = models.CharField(max_length=254, blank=True, default="")
+    enabled_at = models.DateTimeField(null=True, blank=True)
+    #: First privileged sign-in starts the 14-day enrolment window. Kept per
+    #: account so an administrator reset restarts it for that person only.
+    grace_started_at = models.DateTimeField(null=True, blank=True)
+    last_used_counter = models.BigIntegerField(null=True, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounts_user_mfa"
+        verbose_name = "user MFA state"
+
+    def __str__(self) -> str:
+        return f"MFA for user {self.user_id} (enabled={bool(self.enabled_at)})"
+
+
+class MFARecoveryCode(models.Model):
+    """A one-time recovery code, stored only as a Django password hash."""
+
+    mfa = models.ForeignKey(
+        UserMFA,
+        on_delete=models.CASCADE,
+        related_name="recovery_codes",
+    )
+    code_hash = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "accounts_mfa_recovery_code"
+        ordering = ["id"]
+        indexes = [
+            models.Index(fields=["mfa", "used_at"], name="acct_mfa_recovery_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"Recovery code for user {self.mfa_id} (used={bool(self.used_at)})"

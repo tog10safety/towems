@@ -45,7 +45,9 @@ const APPROVAL_TONES = {
 const READINESS_TONES = {
   ready: "success",
   blocked: "danger",
-  in_progress: "info",
+  // In progress reads yellow, the same as the Flight Operations board: grey
+  // means not started, yellow means running, green means finished.
+  in_progress: "warning",
   completed: "success",
   cancelled: "muted",
 };
@@ -54,7 +56,11 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
   const navigate = useNavigate();
   const { permissions } = useAuth();
   const canPlan = Boolean(permissions?.can_plan_missions);
-  const canView = Boolean(permissions?.can_view_missions);
+  // The Logistics post records aircraft fuel, so the air board opens to it even
+  // though the mission register itself stays closed.
+  const canView =
+    Boolean(permissions?.can_view_missions) ||
+    (categoryProp === "air" && Boolean(permissions?.can_record_air_fuel));
   // Erasing a mission is the Super Administrator's alone; the server enforces
   // the same rule, so this only decides whether the button is offered.
   const isAdmin = Boolean(permissions?.is_system_owner);

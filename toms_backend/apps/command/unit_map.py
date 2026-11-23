@@ -66,6 +66,9 @@ def payload(unit, marker: UnitMapMarker | None = None) -> dict:
         "unit_id": unit.id,
         "unit_name": unit.name,
         "unit_acronym": unit.acronym,
+        # The parent lets co-located pins pick the mother unit's seal for their
+        # cluster instead of whichever pin the payload happened to list first.
+        "unit_parent_id": unit.parent_id,
         "latitude": marker.latitude if has_point else None,
         "longitude": marker.longitude if has_point else None,
         "mgrs": marker.mgrs if marker else "",

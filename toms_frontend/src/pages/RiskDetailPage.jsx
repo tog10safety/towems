@@ -60,7 +60,14 @@ export default function RiskDetailPage() {
     data.created_by === user?.id ||
     (data.creator_name && user?.full_name === data.creator_name);
   const isAssignedEvaluator = data.reviewed_by === user?.id;
-  const assessmentReady = (assessment.data?.hazards?.length ?? 0) > 0;
+  // The evaluator only sees a complete draft: at least 8 identified hazards and
+  // every I'M SAFE item ticked. The editor refuses to save anything less.
+  const imsafeItems = assessment.data?.options?.imsafe ?? [];
+  const imsafeComplete =
+    imsafeItems.length > 0 &&
+    imsafeItems.every((item) => assessment.data?.imsafe?.[item.key]);
+  const assessmentReady =
+    (assessment.data?.hazards?.length ?? 0) >= 8 && imsafeComplete;
   const canSubmit = (isCreator || permissions.is_admin) && data.status === "draft";
   const canReview = (isAssignedEvaluator || permissions.is_admin) && data.status === "submitted";
   const canApprove = Boolean(data.can_approve_authority);
@@ -287,7 +294,7 @@ export default function RiskDetailPage() {
                         title={
                           assessmentReady
                             ? undefined
-                            : "Save the assessment before submitting it."
+                            : "Select at least 8 hazards and tick every I'M SAFE item, then save."
                         }
                       >
                         Submit for review
@@ -295,7 +302,8 @@ export default function RiskDetailPage() {
                     </div>
                     {!assessmentReady && (
                       <p className="hint">
-                        Select at least one hazard in the assessment before submitting it.
+                        Select at least 8 hazards and tick every I&apos;M SAFE item in the
+                        assessment before submitting it.
                       </p>
                     )}
                   </>

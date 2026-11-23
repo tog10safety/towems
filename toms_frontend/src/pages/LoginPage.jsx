@@ -6,29 +6,65 @@ import { Button, ErrorBanner, Field, Input } from "../components/ui.jsx";
 import { useTheme } from "../theme/ThemeContext.jsx";
 
 export default function LoginPage() {
-  const { user, login } = useAuth();
+  const { user, login, verifyMfa } = useAuth();
   const { resolvedTheme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [form, setForm] = useState({ username: "", password: "" });
+  const [challenge, setChallenge] = useState(null);
+  const [code, setCode] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   if (user) return <Navigate to={location.state?.from || "/"} replace />;
 
+  const destination = location.state?.from || "/";
+
   async function onSubmit(event) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
-      await login(form.username.trim(), form.password);
-      navigate(location.state?.from || "/", { replace: true });
+      const result = await login(form.username.trim(), form.password);
+      if (result?.challenge) {
+        setChallenge(result);
+        setCode("");
+        setRecoveryMode(false);
+        return;
+      }
+      if (result?.mfa_setup_required) {
+        navigate("/mfa-setup", { replace: true });
+        return;
+      }
+      navigate(destination, { replace: true });
     } catch (err) {
       setError(err.message || "Sign-in failed.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onVerify(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await verifyMfa(challenge.challenge, code.trim(), recoveryMode);
+      navigate(destination, { replace: true });
+    } catch (err) {
+      setError(err.message || "Verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function backToPassword() {
+    setChallenge(null);
+    setCode("");
+    setRecoveryMode(false);
+    setError("");
   }
 
   return (
@@ -58,54 +94,116 @@ export default function LoginPage() {
         </aside>
 
         <section className="login-form-panel">
-          <h2 className="login-heading">Sign in</h2>
+          <h2 className="login-heading">
+            {challenge ? "Two-factor verification" : "Sign in"}
+          </h2>
           <p className="login-copy">
-        
+            {challenge
+              ? `Enter the code for @${challenge.username} from your authenticator app.`
+              : ""}
           </p>
 
           <ErrorBanner message={error} />
 
-          <form onSubmit={onSubmit} className="login-form">
-            <Field label="Username" htmlFor="username" required>
-              <Input
-                id="username"
-                autoComplete="username"
-                autoFocus
-                value={form.username}
-                onChange={(event) => setForm({ ...form, username: event.target.value })}
-                required
-              />
-            </Field>
-            <Field label="Password" htmlFor="password" required>
-              <div className="login-password">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="current-password"
-                  value={form.password}
-                  onChange={(event) => setForm({ ...form, password: event.target.value })}
+          {challenge ? (
+            <>
+              <form onSubmit={onVerify} className="login-form">
+                <Field
+                  label={recoveryMode ? "Recovery code" : "Authenticator code"}
+                  htmlFor="mfa-code"
                   required
-                />
-                <button
-                  type="button"
-                  className="login-password-toggle"
-                  onClick={() => setShowPassword((shown) => !shown)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
-                  tabIndex={0}
+                  hint={
+                    recoveryMode
+                      ? "Each recovery code works once."
+                      : "The six-digit code changes every 30 seconds."
+                  }
                 >
-                  {showPassword ? "Hide" : "Show"}
-                </button>
-              </div>
-            </Field>
-            <Button type="submit" disabled={busy} style={{ width: "100%" }}>
-              {busy ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
+                  <Input
+                    id="mfa-code"
+                    autoFocus
+                    autoComplete="one-time-code"
+                    inputMode={recoveryMode ? "text" : "numeric"}
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    placeholder={recoveryMode ? "XXXX-XXXX" : "000000"}
+                    required
+                  />
+                </Field>
+                <Button type="submit" disabled={busy} style={{ width: "100%" }}>
+                  {busy ? "Verifying…" : "Verify and sign in"}
+                </Button>
+              </form>
 
-          <p className="login-footnote">
-            Forgotten your password? Ask an administrator to issue a reset link.
-          </p>
+              <div className="btn-row" style={{ marginTop: 12 }}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setRecoveryMode((current) => !current);
+                    setCode("");
+                    setError("");
+                  }}
+                >
+                  {recoveryMode ? "Use authenticator code" : "Use a recovery code"}
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={backToPassword}>
+                  Back
+                </Button>
+              </div>
+
+              {challenge.recovery_codes_remaining === 0 && (
+                <p className="login-footnote">
+                  No recovery codes remain. Ask an administrator to reset your MFA enrolment if
+                  you lose your authenticator.
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <form onSubmit={onSubmit} className="login-form">
+                <Field label="Username" htmlFor="username" required>
+                  <Input
+                    id="username"
+                    autoComplete="username"
+                    autoFocus
+                    value={form.username}
+                    onChange={(event) => setForm({ ...form, username: event.target.value })}
+                    required
+                  />
+                </Field>
+                <Field label="Password" htmlFor="password" required>
+                  <div className="login-password">
+                    <Input
+                      id="password"
+                      type={showPassword ? "text" : "password"}
+                      autoComplete="current-password"
+                      value={form.password}
+                      onChange={(event) => setForm({ ...form, password: event.target.value })}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="login-password-toggle"
+                      onClick={() => setShowPassword((shown) => !shown)}
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showPassword}
+                      tabIndex={0}
+                    >
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                </Field>
+                <Button type="submit" disabled={busy} style={{ width: "100%" }}>
+                  {busy ? "Signing in…" : "Sign in"}
+                </Button>
+              </form>
+
+              <p className="login-footnote">
+                Forgotten your password? Ask an administrator to issue a reset link.
+              </p>
+            </>
+          )}
         </section>
       </main>
     </div>

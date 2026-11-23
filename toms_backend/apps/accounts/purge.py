@@ -70,7 +70,7 @@ def delete_account(account, *, actor, reason: str, request=None):
             "instead, so the record keeps its author."
         )
 
-    from apps.accounts.models import PasswordResetToken, UserProfile
+    from apps.accounts.models import PasswordResetToken, UserMFA, UserProfile
     from apps.command.models import (
         ActingAppointment,
         SectionAssignment,
@@ -89,6 +89,8 @@ def delete_account(account, *, actor, reason: str, request=None):
     # Rows that exist only because this account does.
     UserProfile.objects.filter(user_id=account_id).delete()
     PasswordResetToken.objects.filter(user_id=account_id).delete()
+    # Recovery codes cascade from this row.
+    UserMFA.objects.filter(user_id=account_id).delete()
     MRMAttentionDismissal.objects.filter(user_id=account_id).delete()
     Notification.objects.filter(recipient_id=account_id).delete()
     SectionAssignment.objects.filter(user_id=account_id).delete()

@@ -223,8 +223,11 @@ def test_activity_codes_are_the_units_own_registry(db, as_user, unit, other_unit
     response = as_user(creator).get("/api/risk-register/hazard-codes/")
 
     assert response.status_code == 200
-    rows = {row["activity_code"]: row["hazard_count"] for row in response.json()["results"]}
+    results = response.json()["results"]
+    rows = {row["activity_code"]: row["hazard_count"] for row in results}
     assert rows == {"1.1": 2, "4.2": 1}
+    # The code the unit assesses most often leads the picker.
+    assert [row["activity_code"] for row in results] == ["1.1", "4.2"]
 
 
 # ---------------------------------------------------------------------------

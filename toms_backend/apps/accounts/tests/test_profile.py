@@ -123,7 +123,7 @@ def test_user_updates_personnel_details(api, login, creator):
     response = api.patch(
         "/api/auth/profile/",
         {
-            "email": "person@example.mil.ph",
+            "email": "person@gmail.com",
             "sex": "Male",
             "date_of_birth": "1991-02-03",
             "blood_type": "O+",
@@ -141,7 +141,7 @@ def test_user_updates_personnel_details(api, login, creator):
     )
     assert response.status_code == 200, response.content
     body = response.json()
-    assert body["email"] == "person@example.mil.ph"
+    assert body["email"] == "person@gmail.com"
     assert body["date_of_birth"] == "1991-02-03"
     assert body["afsc_tertiary"] == "11A3"
 
@@ -170,6 +170,7 @@ def test_onboarding_completes_after_password_picture_and_signature(api, login, c
         onboarding_required=True,
         avatar_filename="avatar_1.png",
         avatar_content_type="image/png",
+        email="creator@gmail.com",
     )
     creator.signature_filename = "signature_1.png"
     creator.force_password_change = False
@@ -191,6 +192,29 @@ def test_onboarding_completes_after_password_picture_and_signature(api, login, c
     profile.refresh_from_db()
     assert profile.onboarding_required is False
     assert profile.onboarding_completed_at is not None
+
+
+def test_onboarding_is_blocked_without_account_address(api, login, creator):
+    UserProfile.objects.create(
+        user=creator,
+        onboarding_required=True,
+        avatar_filename="avatar_1.png",
+        avatar_content_type="image/png",
+    )
+    creator.signature_filename = "signature_1.png"
+    creator.force_password_change = False
+    creator.save(update_fields=["signature_filename", "force_password_change"])
+
+    login(creator)
+    token = csrf_token(api)
+    response = api.post(
+        "/api/auth/onboarding/complete/",
+        {},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 400
+    assert response.json()["errors"]["gaps"] == ["email"]
 
 
 def test_onboarding_is_blocked_without_signature(api, login, creator):

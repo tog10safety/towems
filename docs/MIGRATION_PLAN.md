@@ -127,16 +127,48 @@ procedure, cutover checklist and rollback procedure. Nothing was deployed.
 
 ## Stage 10 — Production cutover ⏸ awaiting approval
 
-Prerequisites before I ask for the go/no-go:
+Target: DigitalOcean Managed PostgreSQL, TOWEMS on the same droplet as the legacy Flask MRMOS,
+**straight maintenance-window cutover** (no dual-write: two applications writing the same legacy
+tables at once is the one thing this plan avoids).
 
-1. Re-run schema introspection against production and diff against
-   `docs/database_schema.json` (drift check).
-2. Take and **verify** a fresh `pg_dump` + restore test.
-3. Run the additive migration against production (this is the one irreversible-ish step and
-   needs your explicit written approval).
-4. Dual-run window: Flask serves users while Django serves `/api` for comparison.
-5. Switch traffic (reverse proxy), monitor, and keep the Flask app and the pre-cutover dump
-   ready for rollback.
+Run the steps in exactly this order; each is a gate. Full commands are in
+`docs/DEPLOYMENT_AND_ROLLBACK.md` §5.
+
+1. **Drift check** — `tools/introspect_schema.py` against production, diff with
+   `docs/database_schema.json`. Stop on any difference.
+2. **Verified backup** — fresh `tools/postgres_backup.py backup`, then `restore-test`. Keep the
+   dump until sign-off. Copy `signatures/`, `approved_pdfs/` and `static/unit_logos/` the same day.
+3. **Freeze** — announce the maintenance window; Flask stops serving new requests. Django +
+   gunicorn may already be up on the internal port (`/api/health/` = 200) but nginx still points
+   at Flask, so no user sees TOWEMS yet.
+4. **`migrate --plan`**, reviewed, then **`migrate`**. Expect CreateModel/AddField for TOWEMS
+   tables plus the reviewed `command/0011` drop of two TOWEMS-owned tables. Nothing legacy is
+   altered.
+5. **`verify_legacy_mapping`** — zero mismatches, and the 11 legacy row counts identical to the
+   snapshot taken in step 2.
+6. **`import_admin_boundaries`** — `--dry-run`, then the real run: `1730 created, 0 skipped`.
+7. **`require_profile_refresh`** — `--dry-run` (count = active accounts), then the real run,
+   still before nginx serves TOWEMS. This stores the first-login queue; it is a data step, no DDL.
+8. **Rehearse the gate on the real host** — throw-away account: profile form blocks the rest of
+   the app → new password + picture + signature + `@gmail.com` address → prompt clears →
+   Google Authenticator enrolment follows immediately → entry reads `TOWEMS (name@gmail.com)` →
+   recovery codes returned.
+9. **nginx switch** — SPA from the built `dist/`, `/api/` proxied to gunicorn. Flask stays
+   installed and reachable on its previous port; it is the rollback.
+10. **Post-cutover** — smoke checks (existing-account login on the Werkzeug path, dashboard
+    counts, 292 MRMs, one draft, MGRS, CSV), GIS checks, and User Management → *Setup
+    outstanding* as the chase list. Monitor 24–48 h before decommissioning anything.
+
+**Gate behaviour after cutover.** No account reaches the operational API until it has replaced
+its password, uploaded a picture and signature and recorded a Gmail address, and then enrolled
+Google Authenticator; both gates are enforced per request (`apps/accounts/setup_gate.py`,
+`mfa_middleware.py`). Administrators track the remainder in User Management and can reset an
+individual's MFA enrolment when a device is lost.
+
+**Rollback.** Level 1 (nginx back to Flask) is minutes and needs no schema work: the additive
+tables and the first-login flags are inert to Flask. `require_profile_refresh --clear` releases
+the queue if the return to Flask is prolonged. Levels 2 and 3 (drop TOWEMS tables / restore the
+dump) are in `DEPLOYMENT_AND_ROLLBACK.md` §7.
 
 ---
 

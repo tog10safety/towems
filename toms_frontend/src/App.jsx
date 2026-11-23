@@ -20,6 +20,7 @@ const InstructionDetailPage = lazy(() =>
 const InstructionsPage = lazy(() => import("./pages/InstructionsPage.jsx"));
 const InventoryPage = lazy(() => import("./pages/InventoryPage.jsx"));
 const LoginPage = lazy(() => import("./pages/LoginPage.jsx"));
+const MfaSetupPage = lazy(() => import("./pages/MfaSetupPage.jsx"));
 const MissionDetailPage = lazy(() => import("./pages/MissionDetailPage.jsx"));
 const MissionFormPage = lazy(() => import("./pages/MissionFormPage.jsx"));
 const MissionsPage = lazy(() => import("./pages/MissionsPage.jsx"));
@@ -58,6 +59,14 @@ export default function App() {
       <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route
+        path="/mfa-setup"
+        element={
+          <ProtectedRoute>
+            <MfaSetupPage />
+          </ProtectedRoute>
+        }
+      />
       <Route
         element={
           <ProtectedRoute>

@@ -497,7 +497,8 @@ class AirMissionItinerary(models.Model):
     """One planned leg and, once flown, its actual takeoff and landing.
 
     ``etd``/``eta`` are the schedule.  ``atd``/``ata`` are written when the leg
-    actually takes off and lands.  An overflight leg also records ``tot`` (time
+    actually takes off and lands.  ``se``/``sd`` bracket the movement with the
+    engine start and shutdown.  An overflight leg also records ``tot`` (time
     over target) and ``toot`` (time off target).  A missing planned time is
     rendered as TBD; a missing actual time is rendered as NOT RECORDED, never as
     the estimate.
@@ -532,6 +533,11 @@ class AirMissionItinerary(models.Model):
     #: Time over target and time off target, recorded only for overflight legs.
     tot = models.DateTimeField(null=True, blank=True)
     toot = models.DateTimeField(null=True, blank=True)
+    #: Engine start before departure and shutdown after landing. Neither is
+    #: recorded at the target end of an overflight leg: the aircraft arrives
+    #: over the target (TOT) and leaves it (TOOT) without shutting down.
+    se = models.DateTimeField(null=True, blank=True)
+    sd = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
         max_length=16, choices=STATUS_CHOICES, default=STATUS_PLANNED
     )
@@ -713,6 +719,7 @@ class InventoryCategory(models.Model):
         ("age", "Aerospace Ground Equipment (AGE)"),
         ("firearms", "Firearms"),
         ("ammunition", "Ammunition"),
+        ("fuel", "Fuel & Lubricants"),
         ("vehicle", "Vehicles"),
         ("communications", "Communications Equipment"),
         ("other", "Other Authorised Assets"),
@@ -745,6 +752,26 @@ class InventoryItem(TimestampedModel):
         ("condemned", "Condemned"),
     ]
 
+    #: The grades POL stock is bought in. Aviation fuel (POL-01) is AVGas or
+    #: Jet A1 and automotive fuel (POL-02) is diesel or gasoline; the remaining
+    #: POL categories are single products, so the column stays blank for them
+    #: and for everything that is not POL at all.
+    FUEL_GRADE_CHOICES = [
+        ("", "Not graded"),
+        ("avgas", "AVGas"),
+        ("jet_a1", "Jet A1"),
+        ("diesel", "Diesel"),
+        ("gasoline", "Gasoline"),
+    ]
+
+    #: How the fuel is physically held. Drums are counted as drums and each
+    #: item says how many litres one drum holds; bulk stock is already litres.
+    FUEL_FORM_CHOICES = [
+        ("", "Not fuel"),
+        ("drum", "Drums"),
+        ("bulk", "Bulk tank (litres)"),
+    ]
+
     category = models.ForeignKey(
         InventoryCategory, on_delete=models.PROTECT, related_name="items"
     )
@@ -772,10 +799,38 @@ class InventoryItem(TimestampedModel):
         related_name="custodied_items",
     )
     storage_location = models.CharField(max_length=200, blank=True, default="")
+    #: Where the store physically stands once stock has been moved off its
+    #: original site. A transferred drum batch carries the destination's own
+    #: point, so the map pins it there instead of at the unit that owns it.
+    location_latitude = models.FloatField(null=True, blank=True)
+    location_longitude = models.FloatField(null=True, blank=True)
 
     quantity_total = models.IntegerField(default=0)
     quantity_available = models.IntegerField(default=0)
     unit_of_measure = models.CharField(max_length=20, default="unit")
+    fuel_grade = models.CharField(
+        max_length=40, choices=FUEL_GRADE_CHOICES, blank=True, default=""
+    )
+    fuel_form = models.CharField(
+        max_length=20, choices=FUEL_FORM_CHOICES, blank=True, default=""
+    )
+    drum_capacity_litres = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Litres in one drum. Bulk stock is counted in litres and leaves this empty.",
+    )
+    #: POL stock has a shelf life, so the batch it came from is dated. These
+    #: stay empty for everything that is not POL.
+    date_issued = models.DateField(null=True, blank=True)
+    testing_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="When the batch was last tested - aviation fuel only.",
+    )
+    expiry_date = models.DateField(null=True, blank=True)
+    #: The delivery advice behind a bulk aviation receipt. The ledger keeps
+    #: every DA number; this holds the latest one against the tank.
+    da_number = models.CharField(max_length=60, blank=True, default="")
     serviceability = models.CharField(
         max_length=20, choices=SERVICEABILITY_CHOICES, default="serviceable"
     )
@@ -802,6 +857,25 @@ class InventoryItem(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.asset_tag or self.pk})"
+
+    @property
+    def is_fuel(self) -> bool:
+        """POL stock, graded or not: anything filed under a fuel category.
+
+        A lubricant has no grade but is still counted in drums or litres, so
+        the class - not the grade - decides whether the litre figures apply.
+        """
+        return bool(self.category_id) and self.category.kind == "fuel"
+
+    @property
+    def litres_per_unit(self) -> int:
+        """Litres represented by one stored unit: a drum's capacity or 1 litre."""
+        if self.fuel_form == "drum":
+            return int(self.drum_capacity_litres or 0)
+        return 1
+
+    def litres(self, quantity: int) -> int:
+        return max(0, int(quantity or 0)) * self.litres_per_unit
 
 
 class AirAsset(TimestampedModel):
@@ -1070,6 +1144,107 @@ class InventoryTransaction(models.Model):
             models.Index(fields=["item", "-created_at"], name="ops_txn_item_time_idx"),
             models.Index(fields=["kind"], name="ops_txn_kind_idx"),
         ]
+
+
+class AirFuelDraw(TimestampedModel):
+    """POL-01 an aircraft burned, confirmed by the crew at engine shutdown.
+
+    The store's own unit is the accounting unit: a drum-held batch leaves the
+    register in whole drums, a bulk tank in whole litres. ``litres`` carries
+    the fuel actually burned for consumption reporting, never a fraction of
+    store stock.
+    """
+
+    SOURCE_DRUM = "drum"
+    SOURCE_BULK = "bulk"
+    SOURCE_CHOICES = [
+        (SOURCE_DRUM, "Drums"),
+        (SOURCE_BULK, "Bulk (litres)"),
+    ]
+
+    #: ``pending`` is a recorded draw the store could not cover yet: the crew's
+    #: figure is kept, no ledger entry is written, and Logistics clears it when
+    #: the stock lands.
+    STATE_POSTED = "posted"
+    STATE_PENDING = "pending"
+    #: The crew confirmed the sortie burned nothing to record. It clears the
+    #: mission's outstanding list without any stock leaving the register.
+    STATE_NONE = "none"
+    STATE_VOID = "void"
+    STATE_CHOICES = [
+        (STATE_POSTED, "Posted to stock"),
+        (STATE_PENDING, "Awaiting stock"),
+        (STATE_NONE, "No fuel consumed"),
+        (STATE_VOID, "Void"),
+    ]
+
+    mission = models.ForeignKey(
+        Mission, on_delete=models.CASCADE, related_name="air_fuel_draws"
+    )
+    aircraft = models.ForeignKey(
+        AirMissionAircraft, on_delete=models.CASCADE, related_name="fuel_draws"
+    )
+    #: The itinerary leg whose shutdown the figure was confirmed at, so a
+    #: multi-leg sortie records the POL-01 it burned leg by leg.
+    leg = models.ForeignKey(
+        AirMissionItinerary,
+        on_delete=models.CASCADE,
+        related_name="fuel_draws",
+        help_text="The itinerary leg this figure was recorded for.",
+    )
+    source = models.CharField(max_length=10, choices=SOURCE_CHOICES)
+    quantity = models.PositiveIntegerField(
+        help_text="Whole drums, or whole litres for bulk stock."
+    )
+    litres = models.DecimalField(
+        max_digits=10,
+        decimal_places=1,
+        default=0,
+        help_text="Litres the draw represents, for reporting only.",
+    )
+    item = models.ForeignKey(
+        InventoryItem,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="air_fuel_draws",
+    )
+    transaction = models.ForeignKey(
+        InventoryTransaction,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="air_fuel_draws",
+    )
+    state = models.CharField(
+        max_length=10, choices=STATE_CHOICES, default=STATE_POSTED
+    )
+    no_consumption = models.BooleanField(
+        default=False,
+        help_text="The crew confirmed this sortie burned no POL-01 to record.",
+    )
+    note = models.CharField(max_length=255, blank=True, default="")
+    recorded_by = models.ForeignKey(
+        "accounts.User",
+        db_column="recorded_by",
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="air_fuel_draws",
+    )
+
+    class Meta:
+        db_table = "ops_air_fuel_draw"
+        ordering = ["aircraft__sequence", "leg__sequence", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["aircraft", "leg"], name="ops_air_fuel_draw_leg_uniq"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.aircraft_id} L{self.leg_id}: {self.quantity} {self.source}"
 
 
 class InventoryRequest(TimestampedModel):

@@ -23,7 +23,9 @@ from apps.ops.models import (
     MovementEvent,
     Notification,
     TrackingPing,
+    Vehicle,
     VehicleRun,
+    VehicleTripVehicle,
 )
 
 
@@ -634,6 +636,19 @@ def complete_mission(mission, actor, *, force=False, note=""):
             note=note or "Mission closed by the Operations Center with an open run.",
         )
 
+    # A run cancelled by the override puts its vehicle back in the register:
+    # nothing is still tracking it.
+    if open_runs:
+        released = {run.vehicle_id for run in open_runs}
+        held = set(
+            VehicleRun.objects.filter(
+                vehicle_id__in=released, status=VehicleRun.STATUS_ACTIVE
+            ).values_list("vehicle_id", flat=True)
+        )
+        Vehicle.objects.filter(pk__in=released - held, status="on_trip").update(
+            status="available", updated_at=actual
+        )
+
     mission.status = "completed"
     mission.completed_at = actual
     mission.save(update_fields=["status", "completed_at", "updated_at"])
@@ -661,6 +676,109 @@ def complete_mission(mission, actor, *, force=False, note=""):
         priority="normal",
     )
     return mission
+
+
+def _release_vehicles(vehicle_ids, *, exclude_mission=None, exclude_trip=None):
+    """Put vehicles back in the register unless a live run still holds them.
+
+    The runs about to be deleted are named by the caller so they do not count
+    as holders: they are removed straight afterwards and can never finish.
+    """
+    vehicle_ids = set(vehicle_ids)
+    if not vehicle_ids:
+        return set()
+    active = VehicleRun.objects.filter(
+        vehicle_id__in=vehicle_ids, status=VehicleRun.STATUS_ACTIVE
+    )
+    if exclude_mission is not None:
+        active = active.exclude(mission=exclude_mission)
+    if exclude_trip is not None:
+        active = active.exclude(trip=exclude_trip)
+    released = vehicle_ids - set(active.values_list("vehicle_id", flat=True))
+    Vehicle.objects.filter(pk__in=released, status="on_trip").update(
+        status="available", updated_at=timeutils.now()
+    )
+    return released
+
+
+@transaction.atomic
+def release_trip_vehicles(trip):
+    """Free the vehicles of a trip that is being deleted.
+
+    Deleting a trip cascades to its runs, and a run is the only record that
+    ever cleared a vehicle's ``on_trip`` status. Without this the truck stays
+    out for a trip that no longer exists.
+    """
+    vehicle_ids = set(trip.vehicles.values_list("vehicle_id", flat=True)) | set(
+        trip.runs.values_list("vehicle_id", flat=True)
+    )
+    return _release_vehicles(vehicle_ids, exclude_trip=trip)
+
+
+def _mission_vehicle_ids(mission, trip_ids):
+    """Every vehicle the mission moved: its trips and its runs."""
+    return set(
+        VehicleTripVehicle.objects.filter(trip_id__in=trip_ids).values_list(
+            "vehicle_id", flat=True
+        )
+    ) | set(mission.vehicle_runs.values_list("vehicle_id", flat=True))
+
+
+@transaction.atomic
+def cancel_for_mission(mission, actor, *, note=""):
+    """Close the ground movement of a mission that has just been cancelled.
+
+    A cancelled mission records no further actual times, so an open run can
+    never be completed or pinged again. Leaving it "in progress" would hold
+    the trip and its truck out for a plan that cannot run, so unfinished trips
+    and their open runs are cancelled and the vehicles returned to the
+    register.
+    """
+    actual = timeutils.now()
+    open_runs = list(mission.vehicle_runs.filter(status=VehicleRun.STATUS_ACTIVE))
+    for run in open_runs:
+        run.status = VehicleRun.STATUS_CANCELLED
+        run.completed_at = actual
+        run.save(update_fields=["status", "completed_at", "updated_at"])
+        _event(
+            run,
+            MovementEvent.KIND_CANCEL,
+            actor=actor,
+            source=MovementEvent.SOURCE_OPERATIONS_CENTER,
+            actual_at=actual,
+            note=note or "Mission cancelled.",
+        )
+
+    trips = mission.trips.all()
+    trip_ids = list(trips.values_list("id", flat=True))
+    unfinished = trips.exclude(status__in=["completed", "cancelled"])
+    if unfinished.exists():
+        unfinished.update(status="cancelled", updated_at=actual)
+    _release_vehicles(_mission_vehicle_ids(mission, trip_ids), exclude_mission=mission)
+    return trip_ids
+
+
+@transaction.atomic
+def reset_trips_for_mission(mission, actor=None):
+    """Close the movement records of a mission that is being erased.
+
+    Deleting a mission removes its vehicle runs (``CASCADE``) but its trips
+    survive without a mission (``SET_NULL``). Left alone they would stay "in
+    progress" for ever and keep their vehicles out of the register, so every
+    unfinished trip is cancelled and the vehicles it held are released - unless
+    another active run still has them.
+    """
+    trips = mission.trips.all()
+    trip_ids = list(trips.values_list("id", flat=True))
+    # Every vehicle the mission moved comes back, not only those on trips that
+    # were still running: a mission can be erased after its trips closed, and
+    # the fleet must not stay out for a record that no longer exists.
+    vehicle_ids = _mission_vehicle_ids(mission, trip_ids)
+    unfinished = trips.exclude(status__in=["completed", "cancelled"])
+    if unfinished.exists():
+        unfinished.update(status="cancelled", updated_at=timeutils.now())
+    _release_vehicles(vehicle_ids, exclude_mission=mission)
+    return trip_ids
 
 
 # ---------------------------------------------------------------------------

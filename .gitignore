@@ -28,6 +28,9 @@ htmlcov/
 node_modules/
 dist/
 .vite/
+test-results/
+playwright-report/
+blob-report/
 
 # ---------------------------------------------------------------------------
 # Runtime output

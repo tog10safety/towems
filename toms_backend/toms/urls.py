@@ -3,7 +3,10 @@
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.core.csp import csp_report
+
 urlpatterns = [
+    path("api/csp-report/", csp_report, name="csp-report"),
     path("api/", include("apps.accounts.urls")),
     path("api/", include("apps.ops.urls")),
     path("api/", include("apps.command.urls")),

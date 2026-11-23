@@ -58,6 +58,17 @@ urlpatterns = [
     # controlled-item scope as the register itself.
     path("inventory/stats/", inventory_views.InventoryStatsView.as_view(), name="inventory-stats"),
     path(
+        "inventory/fuel/transfer/",
+        inventory_views.FuelTransferView.as_view(),
+        name="inventory-fuel-transfer",
+    ),
+    # Where drums may be sent: the mother Wing's AOR coverage only.
+    path(
+        "inventory/fuel/destinations/",
+        inventory_views.FuelDestinationView.as_view(),
+        name="inventory-fuel-destinations",
+    ),
+    path(
         "inventory/template/",
         inventory_views.InventoryTemplateView.as_view(),
         name="inventory-template",
@@ -71,6 +82,12 @@ urlpatterns = [
         "inventory/import/",
         inventory_views.InventoryImportView.as_view(),
         name="inventory-import",
+    ),
+    # The airports a bulk Jet A1 store may sit on: the caller's own AOR only.
+    path(
+        "inventory/fuel-locations/",
+        inventory_views.FuelLocationView.as_view(),
+        name="inventory-fuel-locations",
     ),
     path("hazards/", hazard_views.HazardListView.as_view(), name="hazard-list"),
     path(

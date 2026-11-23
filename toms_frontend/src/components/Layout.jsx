@@ -242,6 +242,23 @@ export default function Layout() {
           </div>
         </header>
         <main className="content">
+          {user?.mfa_enrollment_required && !user?.mfa_enabled && (
+            <div className="alert alert-warning" role="status">
+              <div className="inline-row" style={{ justifyContent: "space-between", gap: 12 }}>
+                <span>
+                  <strong>Two-factor authentication is required for this account.</strong>{" "}
+                  {typeof user.mfa_grace_days_remaining === "number"
+                    ? `${user.mfa_grace_days_remaining} day${
+                        user.mfa_grace_days_remaining === 1 ? "" : "s"
+                      } left to enrol.`
+                    : "Enrol before the grace period ends."}
+                </span>
+                <NavLink className="btn btn-primary btn-sm" to="/mfa-setup">
+                  Set up authenticator
+                </NavLink>
+              </div>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

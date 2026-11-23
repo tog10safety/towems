@@ -28,6 +28,29 @@ def make_hazard(unit, *, code="1.1", description="Terrain", after=(3, "C"), befo
     )
 
 
+def make_hazards(unit, creator, count=8, *, after=(2, "E"), code="1.1"):
+    """A full set of library rows: an assessment needs at least eight."""
+    rows = []
+    for index in range(count):
+        rows.append(
+            HazardRegistry.objects.create(
+                unit=unit.name,
+                unit_id=unit,
+                activity_code=code,
+                hazard_description=f"Terrain {index + 1}",
+                before_likelihood=5,
+                before_severity="A",
+                before_risk_rating="5A",
+                mitigations="Crew briefing",
+                after_likelihood=after[0],
+                after_severity=after[1],
+                after_risk_rating=f"{after[0]}{after[1]}",
+                created_by=creator,
+            )
+        )
+    return rows
+
+
 @pytest.fixture
 def library(db, unit, creator):
     hazard = HazardRegistry.objects.create(
@@ -91,18 +114,25 @@ def test_hazard_library_is_scoped_to_the_callers_unit(
 
 
 def test_creator_saves_hazards_and_risk_is_recomputed(as_user, creator, unit, mrm_form, library):
+    others = make_hazards(unit, creator, 7, after=(2, "E"))
+    entries = [
+        {
+            "hazard_id": library.id,
+            "override_likelihood": 2,
+            "override_severity": "E",
+            "additional_mitigations": "Extra lookout",
+        }
+    ] + [
+        {
+            "hazard_id": hazard.id,
+            "override_likelihood": 2,
+            "override_severity": "E",
+        }
+        for hazard in others
+    ]
     response = as_user(creator).patch(
         f"/api/risk-register/{mrm_form.id}/details/",
-        {
-            "hazards": [
-                {
-                    "hazard_id": library.id,
-                    "override_likelihood": 2,
-                    "override_severity": "E",
-                    "additional_mitigations": "Extra lookout",
-                }
-            ]
-        },
+        {"hazards": entries},
         format="json",
     )
     assert response.status_code == 200, response.content
@@ -113,13 +143,47 @@ def test_creator_saves_hazards_and_risk_is_recomputed(as_user, creator, unit, mr
     assert link.override_likelihood == 2
     assert link.additional_mitigations == "Extra lookout"
 
-    # 2 * weight(E)=1 = 2  ->  1 point of 3  ->  33.3%
+    # Eight hazards, each 2 x weight(E)=1 -> 1 point of 3 -> 8 of 24 -> 33.3%
     mrm_form.refresh_from_db()
-    assert mrm_form.max_risk == 3
-    assert mrm_form.residual_risk == 1
+    assert mrm_form.max_risk == 24
+    assert mrm_form.residual_risk == 8
     assert round(mrm_form.total_percent, 1) == pytest.approx(33.3, abs=0.1)
     assert mrm_form.authority_level == "Operator"
     assert body["risk"]["authority_level"] == "Operator"
+
+
+def test_an_unchecked_imsafe_item_blocks_the_save(as_user, creator, mrm_form):
+    response = as_user(creator).patch(
+        f"/api/risk-register/{mrm_form.id}/details/",
+        {"imsafe": {"I": True, "M": True, "S": False, "A": True, "F": True, "E": True}},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert "I'M SAFE" in str(response.json())
+
+    # Nothing was written: the checklist is still whatever it was before.
+    mrm_form.refresh_from_db()
+    stored = json.loads(mrm_form.imsafes) if mrm_form.imsafes else {}
+    assert stored.get("S") is not True
+
+
+def test_fewer_than_eight_hazards_cannot_be_saved(
+    as_user, creator, unit, mrm_form, library
+):
+    """A short hazard list is refused instead of stored."""
+    response = as_user(creator).patch(
+        f"/api/risk-register/{mrm_form.id}/details/",
+        {
+            "hazards": [
+                {"hazard_id": hazard.id}
+                for hazard in [library, *make_hazards(unit, creator, 3)]
+            ]
+        },
+        format="json",
+    )
+    assert response.status_code == 400
+    assert "at least 8 hazards" in str(response.json())
+    assert not MissionHazards.objects.filter(mrm_id=mrm_form.id).exists()
 
 
 def test_environment_and_imsafe_round_trip(as_user, creator, mrm_form):
@@ -130,7 +194,7 @@ def test_environment_and_imsafe_round_trip(as_user, creator, mrm_form):
             "workspace": "Slippery / Uneven surface",
             "operational_tempo": "High tempo / Increased workload",
         },
-        "imsafe": {"I": True, "M": True, "S": False, "A": True, "F": True, "E": True},
+        "imsafe": {"I": True, "M": True, "S": True, "A": True, "F": True, "E": True},
     }
     response = as_user(creator).patch(
         f"/api/risk-register/{mrm_form.id}/details/", payload, format="json"
@@ -140,13 +204,13 @@ def test_environment_and_imsafe_round_trip(as_user, creator, mrm_form):
     mrm_form.refresh_from_db()
     # The sentence is what the legacy screens print.
     assert mrm_form.environment.startswith("Rainy / wet. Nighttime (poor visibility).")
-    assert json.loads(mrm_form.imsafes)["S"] is False
+    assert all(json.loads(mrm_form.imsafes).values())
 
     body = response.json()
     # The four legacy choices still compose into the one sentence the form shows.
     assert body["environment"].startswith("Rainy / wet.")
     assert "High tempo / increased workload" in body["environment"]
-    assert body["imsafe"]["S"] is False
+    assert body["imsafe"]["S"] is True
 
 
 def test_environment_is_free_text(as_user, creator, mrm_form):
@@ -204,9 +268,12 @@ def test_hazard_from_another_unit_is_refused(as_user, creator, unit, other_unit,
         after_risk_rating="5A",
         created_by=creator,
     )
+    entries = [
+        {"hazard_id": hazard.id} for hazard in make_hazards(unit, creator, 7)
+    ] + [{"hazard_id": foreign.id}]
     response = as_user(creator).patch(
         f"/api/risk-register/{mrm_form.id}/details/",
-        {"hazards": [{"hazard_id": foreign.id}]},
+        {"hazards": entries},
         format="json",
     )
     assert response.status_code == 400
@@ -256,19 +323,21 @@ def test_details_can_be_read_by_the_viewer(as_user, creator, mrm_form, library):
     assert body["hazards"] == []
 
 
-def test_assessment_summary_reflects_saved_hazards(as_user, creator, mrm_form, library):
+def test_assessment_summary_reflects_saved_hazards(as_user, creator, unit, mrm_form, library):
     """The page's Assessment card reads the same numbers the editor just saved."""
+    hazards = [library, *make_hazards(unit, creator, 7, after=(2, "D"))]
     saved = as_user(creator).patch(
         f"/api/risk-register/{mrm_form.id}/details/",
         {
             "environment": "Rainy and wet. Overnight.",
             "hazards": [
                 {
-                    "hazard_id": library.id,
+                    "hazard_id": hazard.id,
                     "override_likelihood": 2,
                     "override_severity": "D",
                     "additional_mitigations": "Extra brief",
                 }
+                for hazard in hazards
             ],
         },
         format="json",
@@ -277,9 +346,9 @@ def test_assessment_summary_reflects_saved_hazards(as_user, creator, mrm_form, l
     edited = saved.json()["risk"]
 
     summary = as_user(creator).get(f"/api/risk-register/{mrm_form.id}/").json()
-    # 2 x D scores one point of the three available: 33.3% -> Operator.
-    assert summary["max_risk"] == edited["max_risk"] == 3
-    assert summary["residual_risk"] == edited["residual_risk"] == 1
+    # Eight hazards at 2 x D score one point each: 8 of 24 -> 33.3% -> Operator.
+    assert summary["max_risk"] == edited["max_risk"] == 24
+    assert summary["residual_risk"] == edited["residual_risk"] == 8
     assert summary["total_percent"] == pytest.approx(edited["total_percent"], abs=0.05)
     assert summary["total_percent"] == pytest.approx(33.3, abs=0.1)
     assert summary["authority_level"] == edited["authority_level"]

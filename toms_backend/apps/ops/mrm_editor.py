@@ -79,6 +79,10 @@ IMSAFE_CHECKLIST = [
 ]
 IMSAFE_KEYS = [item["key"] for item in IMSAFE_CHECKLIST]
 
+#: An assessment identifies at least this many hazards before it can be saved:
+#: a shorter list leaves the risks the crew is accepting unstated.
+MIN_HAZARDS = 8
+
 ENVIRONMENT_KEYS = ("weather", "lighting", "workspace", "operational_tempo")
 
 
@@ -169,7 +173,9 @@ def hazard_activity_codes(user) -> list:
     """The activity codes this unit's hazard registry actually contains.
 
     The planner picks from these codes, so the list is the unit's own library -
-    never a generic catalogue of codes nobody can add a hazard to.
+    never a generic catalogue of codes nobody can add a hazard to. The codes
+    carrying the most hazards come first, so the activity the unit assesses
+    most often is the first choice; ties fall back to the code itself.
     """
     unit_id = getattr(user, "unit_id", None)
     if not unit_id:
@@ -180,7 +186,7 @@ def hazard_activity_codes(user) -> list:
         .exclude(activity_code="")
         .values("activity_code")
         .annotate(hazard_count=Count("id"))
-        .order_by("activity_code")
+        .order_by("-hazard_count", "activity_code")
     )
     return [
         {"activity_code": row["activity_code"], "hazard_count": row["hazard_count"]}
@@ -729,7 +735,25 @@ def save_details(form, data, actor) -> dict:
     imsafe = data.get("imsafe")
     if isinstance(imsafe, dict):
         answers = {key: bool(imsafe.get(key)) for key in IMSAFE_KEYS}
+        unchecked = [item["title"] for item in IMSAFE_CHECKLIST if not answers[item["key"]]]
+        if unchecked:
+            raise MrmEditError(
+                "Check every I'M SAFE item before saving the assessment "
+                f"(outstanding: {', '.join(unchecked)})."
+            )
         updates["imsafes"] = json.dumps(answers)
+
+    if isinstance(data.get("hazards"), list):
+        selected = {
+            row.get("hazard_id")
+            for row in data["hazards"]
+            if isinstance(row, dict) and row.get("hazard_id")
+        }
+        if len(selected) < MIN_HAZARDS:
+            raise MrmEditError(
+                f"Select at least {MIN_HAZARDS} hazards before saving the "
+                f"assessment; only {len(selected)} are selected."
+            )
 
     with transaction.atomic():
         if "hazards" in data:

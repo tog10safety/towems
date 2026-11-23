@@ -338,13 +338,23 @@ class MRMFormSerializer(serializers.ModelSerializer):
         link = self._link(obj)
         return link.mission.mission_number if link else ""
 
-    def get_date_covered_start(self, obj):
+    def _covered_window(self, obj):
+        """The days this assessment covers.
+
+        A mission-linked assessment covers the mission's own window; one raised
+        by hand in Risk Management covers the day it was raised, so it is never
+        left without a date.
+        """
         link = self._link(obj)
-        return link.mission.start_at if link else None
+        if link is not None:
+            return link.mission.start_at, link.mission.end_at
+        return obj.date_created, obj.date_created
+
+    def get_date_covered_start(self, obj):
+        return self._covered_window(obj)[0]
 
     def get_date_covered_end(self, obj):
-        link = self._link(obj)
-        return link.mission.end_at if link else None
+        return self._covered_window(obj)[1]
 
     def _mission_reviewer(self, obj):
         """The evaluator the Operations Center named on the mission's MRM team."""
@@ -625,6 +635,8 @@ class AirMissionItinerarySerializer(serializers.ModelSerializer):
             "ata",
             "tot",
             "toot",
+            "se",
+            "sd",
             "status",
             "status_label",
             "origin",
@@ -1227,6 +1239,7 @@ class VehicleRunSerializer(serializers.ModelSerializer):
     stops = serializers.SerializerMethodField()
     recent_pings = serializers.SerializerMethodField()
     is_live = serializers.SerializerMethodField()
+    route = serializers.SerializerMethodField()
 
     class Meta:
         model = VehicleRun
@@ -1258,7 +1271,23 @@ class VehicleRunSerializer(serializers.ModelSerializer):
             "events",
             "stops",
             "recent_pings",
+            "route",
         ]
+
+    def get_route(self, obj):
+        """The trip's planned road route, for the driver's own map.
+
+        A driver may not be allowed to open the whole mission record, so the
+        route they actually have to drive is served with their run.
+        """
+        trip = obj.trip
+        return {
+            "status": trip.route_status,
+            "geometry": trip.route_geometry,
+            "distance_m": trip.route_distance_m,
+            "duration_s": trip.route_duration_s,
+            "provider": trip.route_provider,
+        }
 
     def _events_for(self, obj):
         # ``events`` is prefetched by the snapshot query; falling back keeps the
@@ -1545,6 +1574,7 @@ class MissionSerializer(serializers.ModelSerializer):
     dependency = serializers.SerializerMethodField()
     is_airborne = serializers.SerializerMethodField()
     timing_warnings = serializers.SerializerMethodField()
+    air_fuel = serializers.SerializerMethodField()
 
     class Meta:
         model = Mission
@@ -1563,6 +1593,7 @@ class MissionSerializer(serializers.ModelSerializer):
             "held_at",
             "is_airborne",
             "timing_warnings",
+            "air_fuel",
             "depends_on",
             "dependency_release",
             "dependency_buffer_minutes",
@@ -1614,6 +1645,11 @@ class MissionSerializer(serializers.ModelSerializer):
         from apps.ops import timing
 
         return timing.mission_warnings(obj)
+
+    def get_air_fuel(self, obj):
+        from apps.ops import air_fuel
+
+        return air_fuel.mission_payload(obj)
 
     def get_mrm(self, obj):
         return mrm_state(obj)
@@ -2878,6 +2914,16 @@ class InventoryItemSerializer(serializers.ModelSerializer):
     unit_name = serializers.CharField(source="unit.name", read_only=True)
     unit_acronym = serializers.CharField(source="unit.acronym", read_only=True)
     custodian_name = serializers.CharField(source="custodian.full_name", read_only=True)
+    fuel_grade_label = serializers.CharField(
+        source="get_fuel_grade_display", read_only=True
+    )
+    fuel_form_label = serializers.CharField(
+        source="get_fuel_form_display", read_only=True
+    )
+    #: Nothing is inferred from a name: a row that is not fuel reports null, so
+    #: the register never shows a litre figure for materiel.
+    litres_available = serializers.SerializerMethodField()
+    litres_total = serializers.SerializerMethodField()
 
     class Meta:
         model = InventoryItem
@@ -2900,6 +2946,17 @@ class InventoryItemSerializer(serializers.ModelSerializer):
             "quantity_total",
             "quantity_available",
             "unit_of_measure",
+            "fuel_grade",
+            "fuel_grade_label",
+            "fuel_form",
+            "fuel_form_label",
+            "drum_capacity_litres",
+            "date_issued",
+            "testing_date",
+            "expiry_date",
+            "da_number",
+            "litres_available",
+            "litres_total",
             "serviceability",
             "is_sensitive",
             "notes",
@@ -2907,6 +2964,97 @@ class InventoryItemSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "quantity_available", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        """A bulk aviation tank is one record per airport, fed by deliveries.
+
+        Adding POL-01 bulk stock at a location that already holds the same
+        grade tops up that tank instead of opening a second row, and writes
+        the delivery to the ledger under its DA number. Aircraft refuelling
+        then issues from the same balance, so the tank's history is one trail.
+        """
+        from django.db import transaction
+
+        from apps.ops.models import InventoryTransaction
+
+        category = validated_data.get("category")
+        grade = validated_data.get("fuel_grade", "")
+        location = (validated_data.get("storage_location") or "").strip()
+        aviation_bulk = (
+            category is not None
+            and category.kind == "fuel"
+            and category.code == "POL-01"
+            and validated_data.get("fuel_form") == "bulk"
+            and bool(location)
+        )
+        da_number = (validated_data.get("da_number") or "").strip()
+        request = self.context.get("request")
+        actor = getattr(request, "user", None)
+
+        if aviation_bulk:
+            with transaction.atomic():
+                existing = (
+                    InventoryItem.objects.select_for_update()
+                    .filter(
+                        category=category,
+                        fuel_grade=grade,
+                        fuel_form="bulk",
+                        storage_location=location,
+                        unit=validated_data.get("unit"),
+                    )
+                    .order_by("id")
+                    .first()
+                )
+                if existing is not None:
+                    quantity = int(validated_data.get("quantity_total") or 0)
+                    if quantity > 0:
+                        existing.quantity_total += quantity
+                        existing.quantity_available += quantity
+                        if da_number:
+                            existing.da_number = da_number
+                        existing.save(
+                            update_fields=[
+                                "quantity_total",
+                                "quantity_available",
+                                "da_number",
+                                "updated_at",
+                            ]
+                        )
+                        InventoryTransaction.objects.create(
+                            item=existing,
+                            kind="receipt",
+                            quantity=quantity,
+                            actor=actor,
+                            to_unit=existing.unit,
+                            reference=da_number,
+                            notes=validated_data.get("notes", ""),
+                        )
+                    return existing
+
+        instance = super().create(validated_data)
+        # The tank's opening balance is a delivery too, so its DA number is the
+        # first entry in the same trail the later top-ups join.
+        if aviation_bulk and instance.quantity_total and da_number:
+            InventoryTransaction.objects.create(
+                item=instance,
+                kind="receipt",
+                quantity=instance.quantity_total,
+                actor=actor,
+                to_unit=instance.unit,
+                reference=da_number,
+                notes="Opening bulk stock",
+            )
+        return instance
+
+    def get_litres_available(self, obj):
+        if not obj.is_fuel:
+            return None
+        return obj.litres(obj.quantity_available)
+
+    def get_litres_total(self, obj):
+        if not obj.is_fuel:
+            return None
+        return obj.litres(obj.quantity_total)
 
     def validate(self, attrs):
         total = attrs.get("quantity_total", getattr(self.instance, "quantity_total", 0))
@@ -2919,6 +3067,61 @@ class InventoryItemSerializer(serializers.ModelSerializer):
             attrs["is_sensitive"] = True
         if self.instance is None:
             attrs.setdefault("quantity_available", total or 0)
+
+        # Fuel is either sealed drums (counted as drums, each with a stated
+        # capacity) or a bulk tank (already litres). A half-configured fuel row
+        # would quietly report zero litres, so it is refused instead.
+        grade = attrs.get("fuel_grade", getattr(self.instance, "fuel_grade", ""))
+        form = attrs.get("fuel_form", getattr(self.instance, "fuel_form", ""))
+        capacity = attrs.get(
+            "drum_capacity_litres",
+            getattr(self.instance, "drum_capacity_litres", None),
+        )
+        # The rules live in apps.ops.fuel, so the spreadsheet import applies the
+        # identical checks to the identical fields.
+        from apps.ops.fuel import validate_fuel, validate_pol_dates
+
+        # The category decides which grades are valid (POL-01 is AVGas or Jet
+        # A1, POL-02 is diesel or gasoline) and the other POL categories carry
+        # no grade at all.
+        fuel_errors = validate_fuel(grade, form, capacity, category)
+        if fuel_errors:
+            raise serializers.ValidationError(fuel_errors)
+
+        # The issue, testing and expiry dates date a POL batch; they cannot be
+        # filed on a materiel row, and an expiry before the issue is refused.
+        dates = {
+            "date_issued": attrs.get(
+                "date_issued", getattr(self.instance, "date_issued", None)
+            ),
+            "testing_date": attrs.get(
+                "testing_date", getattr(self.instance, "testing_date", None)
+            ),
+            "expiry_date": attrs.get(
+                "expiry_date", getattr(self.instance, "expiry_date", None)
+            ),
+        }
+        date_errors = validate_pol_dates(dates, category)
+        if date_errors:
+            raise serializers.ValidationError(date_errors)
+
+        # A delivery advice belongs to a bulk aviation delivery; a drum or a
+        # lubricant has no DA number to quote.
+        da_number = (
+            attrs.get("da_number", getattr(self.instance, "da_number", "")) or ""
+        ).strip()
+        aviation_bulk = (
+            category is not None
+            and category.kind == "fuel"
+            and category.code == "POL-01"
+            and form == "bulk"
+        )
+        if da_number and not aviation_bulk:
+            raise serializers.ValidationError(
+                {"da_number": "A DA number applies to POL-01 bulk stock only."}
+            )
+        if form != "drum":
+            attrs["drum_capacity_litres"] = None
 
         # An accountable item belongs to a unit the caller actually holds: the
         # Logistics Officer records materiel for their own unit and its
@@ -2947,6 +3150,19 @@ class InventoryItemSerializer(serializers.ModelSerializer):
                             )
                         }
                     )
+
+        # Drums are held at the unit's own POL dump, so the location follows
+        # from the unit rather than being typed in. An explicit location is
+        # still respected (a detachment may store its drums elsewhere).
+        if attrs.get("fuel_form", getattr(self.instance, "fuel_form", "")) == "drum":
+            location = attrs.get(
+                "storage_location", getattr(self.instance, "storage_location", "")
+            )
+            if not str(location or "").strip():
+                unit = attrs.get("unit", getattr(self.instance, "unit", None))
+                label = (unit.acronym or unit.name) if unit is not None else ""
+                if label:
+                    attrs["storage_location"] = f"{label} POL Dump"
         return attrs
 
 

@@ -250,6 +250,24 @@ def test_pdf_is_generated_from_the_saved_assessment(
         after_risk_rating="2C",
         created_by=creator,
     )
+    # An assessment needs at least eight identified hazards before it saves.
+    others = [
+        HazardRegistry.objects.create(
+            unit=creator.unit.name,
+            unit_id=creator.unit,
+            activity_code="Aerodrome Operations",
+            hazard_description=f"Ground hazard {index + 1}",
+            before_likelihood=4,
+            before_severity="A",
+            before_risk_rating="4A",
+            mitigations="Observe the taxi lines",
+            after_likelihood=2,
+            after_severity="D",
+            after_risk_rating="2D",
+            created_by=creator,
+        )
+        for index in range(7)
+    ]
     saved = as_user(creator).patch(
         f"/api/risk-register/{mrm_form.id}/details/",
         {
@@ -262,6 +280,14 @@ def test_pdf_is_generated_from_the_saved_assessment(
                     "override_severity": "D",
                     "additional_mitigations": "Extra brief before departure",
                 }
+            ]
+            + [
+                {
+                    "hazard_id": other.id,
+                    "override_likelihood": 2,
+                    "override_severity": "D",
+                }
+                for other in others
             ],
         },
         format="json",
@@ -292,4 +318,5 @@ def test_pdf_is_generated_from_the_saved_assessment(
     assert response.content.startswith(b"%PDF")
     assert captured["environment"] == "Rainy and wet. Overnight."
     assert captured["aircraft_vehicle"] == "KIA Nr 12345567"
-    assert captured["hazards"] == [(hazard.id, 2, "D", "Extra brief before departure")]
+    assert len(captured["hazards"]) == 8
+    assert (hazard.id, 2, "D", "Extra brief before departure") in captured["hazards"]

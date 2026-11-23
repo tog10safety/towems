@@ -854,3 +854,127 @@ def test_director_route_stops_before_command_and_notifies_higher(
             related_id=str(created["id"]),
         ).exists()
     assert Mission.objects.filter(pk=created["id"]).exists()
+
+
+def test_deleting_a_mission_closes_its_trips_and_frees_its_vehicles(
+    as_user, planner, seat_admin, unit
+):
+    """An erased mission must not leave a trip running with no run to finish it."""
+    from apps.ops.models import Vehicle, VehicleTrip, VehicleTripVehicle
+
+    mission = as_user(planner).post(
+        "/api/missions/", ground_payload(unit), format="json"
+    ).json()
+    vehicle = Vehicle.objects.create(
+        registration_number="KM450-DEL-1",
+        vehicle_type="KM450",
+        unit=unit,
+        status="on_trip",
+    )
+    running = VehicleTrip.objects.create(
+        trip_number="TRIP-DEL-1",
+        title="Convoy move",
+        mission_id=mission["id"],
+        created_by=planner,
+        status="in_progress",
+    )
+    VehicleTripVehicle.objects.create(trip=running, vehicle=vehicle)
+    done = VehicleTrip.objects.create(
+        trip_number="TRIP-DEL-2",
+        title="Earlier move",
+        mission_id=mission["id"],
+        created_by=planner,
+        status="completed",
+    )
+    # A mission can be erased after its trip has closed: that vehicle must come
+    # back to the register too.
+    parked = Vehicle.objects.create(
+        registration_number="KM450-DEL-2",
+        vehicle_type="KM450",
+        unit=unit,
+        status="on_trip",
+    )
+    VehicleTripVehicle.objects.create(trip=done, vehicle=parked)
+
+    response = as_user(seat_admin).delete(f"/api/missions/{mission['id']}/")
+    assert response.status_code == 204, response.content
+
+    running.refresh_from_db()
+    done.refresh_from_db()
+    vehicle.refresh_from_db()
+    # The trip keeps its own row, but it is no longer running...
+    assert running.mission_id is None
+    assert running.status == "cancelled"
+    # ...the trucks are back in the register...
+    assert vehicle.status == "available"
+    parked.refresh_from_db()
+    assert parked.status == "available"
+    # ...and a trip that had already finished keeps its status.
+    assert done.status == "completed"
+
+
+def test_deleting_a_mission_does_not_free_a_truck_another_mission_holds(
+    as_user, planner, seat_admin, unit
+):
+    """The reset frees only vehicles no other live run still holds."""
+    from apps.core import timeutils
+    from apps.ops.models import Vehicle, VehicleRun, VehicleTrip, VehicleTripVehicle
+
+    def make_mission(number):
+        return Mission.objects.create(
+            mission_number=number,
+            category=Mission.CATEGORY_GROUND,
+            title="Convoy move",
+            unit=unit,
+            created_by=planner,
+            status="active",
+            start_at=timeutils.now(),
+            end_at=timeutils.now(),
+        )
+
+    doomed = make_mission("TOWEMS-GO-GUARD-001")
+    survivor = make_mission("TOWEMS-GO-GUARD-002")
+    truck = Vehicle.objects.create(
+        registration_number="KM450-GUARD-1",
+        vehicle_type="KM450",
+        unit=unit,
+        status="on_trip",
+    )
+    doomed_trip = VehicleTrip.objects.create(
+        trip_number="TRIP-GUARD-1",
+        title="Doomed move",
+        mission=doomed,
+        created_by=planner,
+        status="in_progress",
+    )
+    VehicleTripVehicle.objects.create(trip=doomed_trip, vehicle=truck)
+    live_trip = VehicleTrip.objects.create(
+        trip_number="TRIP-GUARD-2",
+        title="Live move",
+        mission=survivor,
+        created_by=planner,
+        status="in_progress",
+    )
+    VehicleTripVehicle.objects.create(trip=live_trip, vehicle=truck)
+    live_run = VehicleRun.objects.create(
+        mission=survivor,
+        trip=live_trip,
+        vehicle=truck,
+        status=VehicleRun.STATUS_ACTIVE,
+    )
+
+    response = as_user(seat_admin).delete(f"/api/missions/{doomed.id}/")
+    assert response.status_code == 204, response.content
+
+    truck.refresh_from_db()
+    doomed_trip.refresh_from_db()
+    live_trip.refresh_from_db()
+    live_run.refresh_from_db()
+
+    # The erased mission's trip is closed...
+    assert doomed_trip.mission_id is None
+    assert doomed_trip.status == "cancelled"
+    # ...but the truck is genuinely out for the other mission, so it stays out.
+    assert truck.status == "on_trip"
+    assert live_trip.status == "in_progress"
+    assert live_run.status == VehicleRun.STATUS_ACTIVE

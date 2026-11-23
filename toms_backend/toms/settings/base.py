@@ -98,6 +98,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Report-only by default until the rollout has collected clean reports.
+    "apps.core.middleware.ContentSecurityPolicyMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -106,6 +108,9 @@ MIDDLEWARE = [
     # Stamps each signed-in account's last activity (dashboard presence rail).
     # It needs the session user, so it follows AuthenticationMiddleware.
     "apps.accounts.presence.PresenceMiddleware",
+    # An expired MFA grace window leaves a setup-only session. Only sessions
+    # flagged by LoginView are restricted; token clients are untouched.
+    "apps.accounts.mfa_middleware.MFAEnforcementMiddleware",
     "apps.core.middleware.RequestAuditMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -199,6 +204,17 @@ CORS_ALLOWED_ORIGINS = env_list(
 CORS_ALLOW_CREDENTIALS = True
 
 # --------------------------------------------------------------------------
+# Content Security Policy (report-only rollout)
+# --------------------------------------------------------------------------
+# The browser posts violations to this path; the endpoint logs them under the
+# "towems.csp" logger and always returns 204. Keep report-only enabled until
+# the rollout reports are clean, then set TOMS_CSP_REPORT_ONLY=false.
+CSP_REPORT_ONLY = env_bool("TOMS_CSP_REPORT_ONLY", True)
+CSP_REPORT_URI = env("TOMS_CSP_REPORT_URI", "/api/csp-report/")
+CSP_EXTRA_IMG_SRC = env_list("TOMS_CSP_EXTRA_IMG_SRC")
+CSP_EXTRA_CONNECT_SRC = env_list("TOMS_CSP_EXTRA_CONNECT_SRC")
+
+# --------------------------------------------------------------------------
 # Django REST Framework
 # --------------------------------------------------------------------------
 
@@ -282,6 +298,16 @@ SIMPLE_JWT = {
 
 LEGACY_UPLOAD_DIR = PROJECT_ROOT / "uploads"
 LEGACY_SIGNATURE_DIR = PROJECT_ROOT / "signatures"
+
+#: Deployment policy: every active account enrols a TOTP authenticator
+#: (Google Authenticator) on its first sign-in after the TOWEMS cutover, not
+#: only Administrators and Commanders.
+MFA_REQUIRED_FOR_ALL_ACCOUNTS = True
+
+#: The first-sign-in profile refresh asks for the actual Gmail account the
+#: person will use, so the address must end with this suffix. Set to "" only if
+#: a deployment must also accept Google Workspace addresses on unit domains.
+PROFILE_EMAIL_SUFFIX = "@gmail.com"
 LEGACY_PDF_DIR = PROJECT_ROOT / "approved_pdfs"
 LEGACY_LOGO_DIR = PROJECT_ROOT / "static" / "unit_logos"
 # Static images reused by the MRM PDF (page footer, default logo, risk matrix).

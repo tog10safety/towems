@@ -64,7 +64,10 @@ def visible_missions(user):
     if role_rules.has_capability(user, role_rules.CAP_VIEW_MISSIONS):
         return queryset
 
-    return queryset.filter(
+    # The Logistics post that records an airframe's fuel figure has to reach the
+    # sortie it records against, so air missions open to it. The ground register
+    # stays closed: that post is not a mission reader.
+    attached = (
         Q(created_by=user)
         | Q(personnel__user=user, personnel__is_active=True)
         | Q(mrm_team__user=user, mrm_team__is_active=True)
@@ -72,7 +75,10 @@ def visible_missions(user):
         # they are not on the mission's personnel roster.
         | Q(vehicle_runs__driver=user)
         | shared
-    ).distinct()
+    )
+    if role_rules.has_capability(user, role_rules.CAP_RECORD_AIR_FUEL):
+        attached |= Q(category=Mission.CATEGORY_AIR)
+    return queryset.filter(attached).distinct()
 
 class StockError(InventoryError):
     """Insufficient quantity."""

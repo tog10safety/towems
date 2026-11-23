@@ -54,6 +54,13 @@ def row(**overrides):
         "unit": "",
         "storage_location": "",
         "notes": "",
+        "fuel_grade": "",
+        "fuel_form": "",
+        "drum_capacity_litres": "",
+        "date_issued": "",
+        "testing_date": "",
+        "expiry_date": "",
+        "da_number": "",
     }
     values.update(overrides)
     return [values[field] for field, _label in inventory_excel.COLUMNS]
@@ -67,6 +74,12 @@ def age_category(db):
 @pytest.fixture
 def materiel_category(db):
     return InventoryCategory.objects.get(code="MAT")
+
+
+@pytest.fixture
+def fuel_category(db):
+    # Seeded by migration 0043.
+    return InventoryCategory.objects.get(code="POL-01")
 
 
 def label(category):
@@ -391,6 +404,240 @@ def test_export_follows_the_asset_class_filter(as_user, logistics, materiel_cate
     sheet = load_workbook(BytesIO(response.content))[inventory_excel.SHEET_TITLE]
     names = [sheet.cell(row=index, column=3).value for index in range(2, sheet.max_row + 1)]
     assert names == ["Ground Power Unit"]
+
+
+def test_the_export_carries_the_pol_batch_dates(as_user, logistics, unit, fuel_category):
+    import datetime as dt
+
+    InventoryItem.objects.create(
+        category=fuel_category,
+        name="Petron Corporation",
+        unit=unit,
+        quantity_total=5000,
+        quantity_available=5000,
+        unit_of_measure="litre",
+        fuel_grade="jet_a1",
+        fuel_form="bulk",
+        date_issued=dt.date(2026, 11, 1),
+        testing_date=dt.date(2026, 11, 5),
+        expiry_date=dt.date(2027, 11, 1),
+    )
+    response = as_user(logistics).get("/api/inventory/export/?kind=fuel")
+    sheet = load_workbook(BytesIO(response.content))[inventory_excel.SHEET_TITLE]
+    headers = {cell.value: index for index, cell in enumerate(sheet[1], start=1)}
+
+    assert sheet.cell(row=2, column=headers["Date Issued"]).value == "2026-11-01"
+    assert sheet.cell(row=2, column=headers["Testing Date"]).value == "2026-11-05"
+    assert sheet.cell(row=2, column=headers["Expiry Date"]).value == "2027-11-01"
+
+
+def test_the_template_offers_the_jet_a1_fuel_pickers(as_user, logistics):
+    workbook = load_workbook(BytesIO(as_user(logistics).get("/api/inventory/template/").content))
+    sheet = workbook[inventory_excel.SHEET_TITLE]
+    validations = {
+        str(rule.sqref).split(" ")[0][0]: rule
+        for rule in sheet.data_validations.dataValidation
+    }
+    # Fuel Grade and Fuel Form are dropdowns too, so an encoder picks them.
+    for column in ("M", "N"):
+        assert column in validations, f"column {column} has no picker"
+        assert validations[column].type == "list"
+        assert validations[column].formula1.startswith("Lists!")
+
+    lists = workbook["Lists"]
+    titles = {
+        cell.value: index for index, cell in enumerate(lists[1], start=1) if cell.value
+    }
+    grades = {
+        lists.cell(row=row, column=titles["Fuel Grade"]).value
+        for row in range(2, lists.max_row + 1)
+        if lists.cell(row=row, column=titles["Fuel Grade"]).value
+    }
+    forms = {
+        lists.cell(row=row, column=titles["Fuel Form"]).value
+        for row in range(2, lists.max_row + 1)
+        if lists.cell(row=row, column=titles["Fuel Form"]).value
+    }
+    assert grades == {"AVGas", "Jet A1", "Diesel", "Gasoline"}
+    assert forms == {"Drums", "Bulk tank (litres)"}
+
+
+def test_an_import_files_the_pol_batch_dates(as_user, logistics, fuel_category):
+    payload = workbook_bytes(
+        [
+            row(
+                category=label(fuel_category),
+                name="Petron Corporation",
+                quantity_total=5000,
+                unit_of_measure="litre",
+                fuel_grade="Jet A1",
+                fuel_form="Bulk tank (litres)",
+                date_issued="2026-11-01",
+                testing_date="2026-11-05",
+                expiry_date="2027-11-01",
+            )
+        ]
+    )
+    response = as_user(logistics).post(
+        "/api/inventory/import/?kind=fuel",
+        {"file": upload(payload)},
+        format="multipart",
+    )
+
+    assert response.status_code == 201, response.content
+    item = InventoryItem.objects.get(name="Petron Corporation")
+    assert item.date_issued.isoformat() == "2026-11-01"
+    assert item.testing_date.isoformat() == "2026-11-05"
+    assert item.expiry_date.isoformat() == "2027-11-01"
+
+
+def test_a_template_downloaded_from_a_tab_offers_only_that_section(as_user, logistics):
+    """A POL template lists POL categories, so the workbook matches the tab."""
+    response = as_user(logistics).get("/api/inventory/template/?kind=fuel")
+    workbook = load_workbook(BytesIO(response.content))
+    rows = list(workbook["Lists"].iter_rows(min_row=2, values_only=True))
+    categories = {row[1] for row in rows if row[1]}
+    classes = {row[0] for row in rows if row[0]}
+
+    assert categories and all(value.startswith("POL-") for value in categories)
+    assert classes == {"Fuel & Lubricants"}
+
+
+def test_an_import_from_a_tab_refuses_rows_from_another_section(
+    as_user, logistics, materiel_category
+):
+    """Uploading from POL cannot file a materiel row."""
+    payload = workbook_bytes(
+        [row(category=label(materiel_category), name="Field Rations")]
+    )
+    response = as_user(logistics).post(
+        "/api/inventory/import/?kind=fuel",
+        {"file": upload(payload)},
+        format="multipart",
+    )
+
+    assert response.status_code == 400
+    # The error envelope nests the per-row errors once more under "errors".
+    rows = response.json()["errors"]["errors"]
+    messages = [message for values in rows.values() for message in values]
+    assert any("another section" in message for message in messages)
+    assert not InventoryItem.objects.filter(name="Field Rations").exists()
+
+
+def test_jet_a1_round_trips_through_export_and_import(as_user, logistics, unit):
+    """The workbook carries grade, form and litres per drum back in."""
+    fuel_category = InventoryCategory.objects.get(code="POL-01")
+    InventoryItem.objects.create(
+        category=fuel_category,
+        name="Jet A1 drums",
+        unit=unit,
+        storage_location="POL Bay 1",
+        quantity_total=12,
+        quantity_available=12,
+        unit_of_measure="drum",
+        fuel_grade="jet_a1",
+        fuel_form="drum",
+        drum_capacity_litres=200,
+    )
+    InventoryItem.objects.create(
+        category=fuel_category,
+        name="Jet A1 bulk tank",
+        unit=unit,
+        quantity_total=15000,
+        quantity_available=15000,
+        unit_of_measure="litre",
+        fuel_grade="jet_a1",
+        fuel_form="bulk",
+    )
+    client = as_user(logistics)
+    exported = client.get("/api/inventory/export/").content
+    sheet = load_workbook(BytesIO(exported))[inventory_excel.SHEET_TITLE]
+    headers = [cell.value for cell in sheet[1]]
+    assert headers == HEADERS
+    grade = headers.index("Fuel Grade") + 1
+    form = headers.index("Fuel Form") + 1
+    capacity = headers.index("Litres per Drum") + 1
+    rows = {
+        sheet.cell(row=row, column=3).value: row
+        for row in range(2, sheet.max_row + 1)
+    }
+
+    drums_row = rows["Jet A1 drums"]
+    assert sheet.cell(row=drums_row, column=grade).value == "Jet A1"
+    assert sheet.cell(row=drums_row, column=form).value == "Drums"
+    assert sheet.cell(row=drums_row, column=capacity).value == 200
+    bulk_row = rows["Jet A1 bulk tank"]
+    assert sheet.cell(row=bulk_row, column=grade).value == "Jet A1"
+    assert sheet.cell(row=bulk_row, column=form).value == "Bulk tank (litres)"
+    assert sheet.cell(row=bulk_row, column=capacity).value in (None, "")
+
+    # Clear the register and feed the export straight back in.
+    InventoryItem.objects.all().delete()
+    response = client.post(
+        "/api/inventory/import/", {"file": upload(exported)}, format="multipart"
+    )
+    assert response.status_code == 201, response.content
+
+    imported = {item.name: item for item in InventoryItem.objects.all()}
+    drums = imported["Jet A1 drums"]
+    assert drums.fuel_grade == "jet_a1"
+    assert drums.fuel_form == "drum"
+    assert drums.drum_capacity_litres == 200
+    assert drums.litres(drums.quantity_available) == 12 * 200
+    bulk = imported["Jet A1 bulk tank"]
+    assert bulk.fuel_form == "bulk"
+    assert bulk.drum_capacity_litres is None
+    assert bulk.litres(bulk.quantity_available) == 15000
+
+
+def test_an_imported_fuel_row_is_validated_like_the_api(
+    as_user, logistics, fuel_category, unit
+):
+    client = as_user(logistics)
+
+    def send(**overrides):
+        body = row(category=label(fuel_category), name="Jet A1 drums", **overrides)
+        return client.post(
+            "/api/inventory/import/",
+            {"file": upload(workbook_bytes([body]))},
+            format="multipart",
+        )
+
+    no_form = send(fuel_grade="Jet A1")
+    assert no_form.status_code == 400
+    assert "Fuel Form" in str(no_form.json())
+
+    no_capacity = send(fuel_grade="Jet A1", fuel_form="Drums")
+    assert no_capacity.status_code == 400
+    assert "Litres per Drum" in str(no_capacity.json())
+
+    bulk_with_capacity = send(
+        fuel_grade="Jet A1", fuel_form="Bulk tank (litres)", drum_capacity_litres=200
+    )
+    assert bulk_with_capacity.status_code == 400
+    assert "Litres per Drum" in str(bulk_with_capacity.json())
+
+    unknown_grade = send(fuel_grade="Kerosene", fuel_form="Drums", drum_capacity_litres=200)
+    assert unknown_grade.status_code == 400
+    assert "Fuel Grade" in str(unknown_grade.json())
+
+    # Nothing above was written.
+    assert not InventoryItem.objects.exists()
+
+    created = send(
+        fuel_grade="Jet A1",
+        fuel_form="Drums",
+        drum_capacity_litres=200,
+        unit_of_measure="drum",
+    )
+    assert created.status_code == 201, created.content
+    item = InventoryItem.objects.get(name="Jet A1 drums")
+    assert item.fuel_grade == "jet_a1"
+    assert item.fuel_form == "drum"
+    assert item.drum_capacity_litres == 200
+    assert item.litres(item.quantity_total) == 200
+    # A drum row with no location lands at the unit's POL dump, like the API.
+    assert item.storage_location == f"{unit.acronym} POL Dump"
 
 
 def test_export_and_import_round_trip(as_user, logistics, materiel_category, unit):

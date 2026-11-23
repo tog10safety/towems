@@ -70,6 +70,43 @@ def test_dashboard_requires_authentication(api):
     assert api.get("/api/dashboard/").status_code in (401, 403)
 
 
+def test_only_live_ground_missions_count_as_outstanding_mrm(
+    as_user, safety, creator, unit
+):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.ops.models import Mission
+
+    def mission(number, category, status, start_at):
+        return Mission.objects.create(
+            mission_number=number,
+            category=category,
+            title="Without an MRM",
+            purpose="Training",
+            unit=unit,
+            created_by=creator,
+            status=status,
+            start_at=start_at,
+        )
+
+    # A ground patrol flown two days ago with no risk assessment at all. The gap
+    # is real, but the patrol is over, so it is not work the watch can act on.
+    mission("MSN-MRM-DONE", "ground", "completed", timezone.now() - timedelta(days=2))
+    # Still ahead: this one is genuinely outstanding and not yet overdue.
+    mission("MSN-MRM-PLANNED", "ground", "planned", timezone.now() + timedelta(days=1))
+    # Air missions are excluded from the MRM requirement, so this sortie must
+    # not raise the outstanding count however soon it departs.
+    mission("MSN-MRM-AIR", "air", "planned", timezone.now() + timedelta(days=1))
+
+    body = as_user(safety).get("/api/dashboard/").json()["mrm"]
+
+    assert body["missing"] == 1
+    assert body["overdue"] == 0
+    assert body["pending"] == 0
+
+
 def test_safety_analytics_is_only_returned_to_a_unit_safety_officer(
     as_user, creator, safety, unit
 ):
@@ -163,6 +200,58 @@ def test_safety_analytics_covers_only_the_officers_own_unit(
     assert body["missions"]["total"] == 1
     assert body["missions"]["without_approved_mrm"] == 1
     assert [row["mrm_number"] for row in body["attention"]] == ["MRM-OWN-OPEN"]
+
+
+def test_safety_watch_ignores_air_and_finished_missions(as_user, safety, creator, unit):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.legacy.models import MRMForm
+    from apps.ops.models import Mission, RiskAssessment
+
+    def form(number):
+        return MRMForm.objects.create(
+            mrm_number=number,
+            activity_mission=f"Activity {number}",
+            created_by=creator,
+            safety_objectives="Safe",
+            status="submitted",
+            review_status="pending",
+            authority_approved=False,
+            original_unit_id=unit.id,
+            original_unit_name=unit.name,
+        )
+
+    def mission(number, category, status):
+        return Mission.objects.create(
+            mission_number=number,
+            category=category,
+            title="Risk work",
+            purpose="Training",
+            unit=unit,
+            created_by=creator,
+            status=status,
+            start_at=timezone.now() - timedelta(days=1),
+        )
+
+    # A finished ground patrol whose form was never approved: an audit gap, not
+    # a queued action. Its form is linked the way the risk workflow links it.
+    done = mission("MSN-WATCH-DONE", "ground", "completed")
+    RiskAssessment.objects.create(mission=done, mrm_form=form("MRM-DONE"))
+
+    # An air sortie keeps its MRM through the mission's direct form link.
+    air = mission("MSN-WATCH-AIR", "air", "planned")
+    air.risk_form = form("MRM-AIR")
+    air.save(update_fields=["risk_form"])
+
+    # Unattached paperwork still needs its approval.
+    form("MRM-STANDALONE")
+
+    body = as_user(safety).get("/api/dashboard/").json()["safety"]
+
+    assert body["missions"]["without_approved_mrm"] == 0
+    assert [row["mrm_number"] for row in body["attention"]] == ["MRM-STANDALONE"]
 
 
 def test_safety_officer_can_hide_and_restore_an_attention_item(
@@ -280,3 +369,121 @@ def test_dashboard_personnel_availability(as_user, planner, unit):
 
     body_after = as_user(planner).get("/api/dashboard/").json()
     assert body_after["personnel"]["total"] >= body_before["personnel"]["total"]
+
+
+def test_dashboard_lists_the_pol_batches_expiring_first(as_user, safety, unit):
+    """Monitoring names the shelf lives that run out, not just a stock count."""
+    import datetime as dt
+
+    from django.utils import timezone
+
+    today = timezone.now().date()
+    fuel = InventoryCategory.objects.get(code="POL-01")
+
+    def batch(name, *, days, drums, available=None):
+        return InventoryItem.objects.create(
+            category=fuel,
+            name=name,
+            unit=unit,
+            storage_location="Unit POL Dump",
+            quantity_total=drums,
+            quantity_available=drums if available is None else available,
+            unit_of_measure="drum",
+            fuel_grade="jet_a1",
+            fuel_form="drum",
+            drum_capacity_litres=200,
+            expiry_date=today + dt.timedelta(days=days),
+        )
+
+    expired = batch("Expired batch", days=-3, drums=4)
+    soon = batch("Soon batch", days=5, drums=10)
+    later = batch("Later batch", days=90, drums=10)
+    drained = batch("Drained batch", days=2, drums=0)
+
+    body = as_user(safety).get("/api/dashboard/").json()["watch"]
+
+    assert body["horizon_days"] == 30
+    # Past-due stock is the most urgent, so it leads the list.
+    assert body["fuel_expiring_count"] == 2
+    rows = body["fuel_expiring"]
+    assert [row["id"] for row in rows] == [expired.id, soon.id]
+    assert rows[0]["days_left"] == -3
+    assert rows[1]["grade"] == "Jet A1"
+    assert rows[1]["drums"] == 10
+    assert rows[1]["litres"] == 2000
+    assert rows[1]["location"] == "Unit POL Dump"
+
+    listed = {row["id"] for row in rows}
+    assert later.id not in listed  # beyond the 30-day horizon
+    assert drained.id not in listed  # nothing left to draw down
+
+    summary = as_user(safety).get("/api/dashboard/").json()
+    # The tiles read the same stock the watch list does: every drum on hand,
+    # whether or not it expires this month, summed in litres.
+    assert summary["fuel"]["litres_available"] == 4800
+    assert summary["fuel"]["drums_available"] == 24
+    assert summary["fuel"]["expiring"] == 2
+
+
+def test_dashboard_vehicle_counts_ignore_personal_vehicles(as_user, safety, unit):
+    """The tile counts the unit's fleet, the same rows the register lists."""
+    Vehicle.objects.create(
+        registration_number="FLT-1", vehicle_type="Truck", unit=unit
+    )
+    Vehicle.objects.create(
+        registration_number="FLT-2",
+        vehicle_type="Truck",
+        unit=unit,
+        status="on_trip",
+    )
+    # A POV is a person's car: the register hides it, so the tile must too.
+    Vehicle.objects.create(
+        registration_number="POV-1", vehicle_type="Car", unit=unit, is_pov=True
+    )
+
+    body = as_user(safety).get("/api/dashboard/").json()
+
+    assert body["vehicles"]["available"] == 1
+    assert body["vehicles"]["on_trip"] == 1
+    assert body["vehicles"]["on_trip_details"] == []
+
+
+def test_dashboard_names_the_vehicle_on_each_running_trip(as_user, safety, unit):
+    """The tile says which vehicle is out, and whether it is a POV or a PAFMV."""
+    from apps.ops.models import VehicleTrip, VehicleTripVehicle
+
+    fleet = Vehicle.objects.create(
+        registration_number="KM450-T1", vehicle_type="KM450", unit=unit
+    )
+    pov = Vehicle.objects.create(
+        registration_number="POV-T1", vehicle_type="Car", unit=unit, is_pov=True
+    )
+    for index, vehicle in enumerate((fleet, pov), start=1):
+        trip = VehicleTrip.objects.create(
+            trip_number=f"TRIP-D1-{index}",
+            title="Convoy move",
+            status="in_progress",
+            created_by=safety,
+        )
+        VehicleTripVehicle.objects.create(trip=trip, vehicle=vehicle)
+
+    details = as_user(safety).get("/api/dashboard/").json()["vehicles"][
+        "on_trip_details"
+    ]
+
+    assert details == [
+        {
+            "vehicle_id": fleet.id,
+            "registration_number": "KM450-T1",
+            "kind": "PAFMV",
+            "trip_number": "TRIP-D1-1",
+            "trip_title": "Convoy move",
+        },
+        {
+            "vehicle_id": pov.id,
+            "registration_number": "POV-T1",
+            "kind": "POV",
+            "trip_number": "TRIP-D1-2",
+            "trip_title": "Convoy move",
+        },
+    ]

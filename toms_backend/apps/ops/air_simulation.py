@@ -164,6 +164,7 @@ def _status_label(status: str) -> str:
         "planned": "Planned",
         "en_route": "En Route",
         "arrived": "Arrived",
+        "landed": "Landed at Stop",
         "on_hold": "On Hold",
         "cancelled": "Cancelled",
         "delayed": "Delayed",
@@ -173,6 +174,73 @@ def _status_label(status: str) -> str:
         "position_missing": "Position Not Available",
         "draft": "Draft",
     }.get(status, status.replace("_", " ").title())
+
+
+def _leg_window(leg) -> tuple[bool, bool]:
+    """Return ``(departed, finished)`` for one leg.
+
+    An overflight leg is flown TOT to TOOT; every other leg is flown ATD to
+    ATA, which is the same vocabulary the Daily Operations board records.
+    """
+    if getattr(leg, "overflight", False):
+        return bool(leg.tot), bool(leg.toot)
+    return bool(leg.atd), bool(leg.ata)
+
+
+def _leg_lengths(legs) -> list[float]:
+    """Planned distance of every leg, in itinerary order."""
+    lengths = []
+    for leg in legs:
+        start = formation_rules.coordinates_from_location(leg.origin or "")
+        end = formation_rules.coordinates_from_location(leg.destination or "")
+        lengths.append(
+            formation_rules.distance_km(start, end)
+            if start is not None and end is not None
+            else 0.0
+        )
+    return lengths
+
+
+def _current_leg_index(legs, progress: float) -> int | None:
+    """The leg an aircraft is on now, or the next one it has to fly.
+
+    Recorded actuals decide first -- an airborne leg is the current enroute --
+    and a landed leg hands over to the next unflown one. A plan with no actual
+    times yet follows the simulated position instead, so the side panel and the
+    marker never disagree about which leg is being tracked.
+    """
+    legs = list(legs or [])
+    if not legs:
+        return None
+
+    airborne = None
+    next_open = None
+    recorded = False
+    for index, leg in enumerate(legs):
+        departed, finished = _leg_window(leg)
+        recorded = recorded or departed or finished
+        if departed and not finished:
+            airborne = index
+        if next_open is None and not finished:
+            next_open = index
+
+    if airborne is not None:
+        return airborne
+    if recorded:
+        return next_open if next_open is not None else len(legs) - 1
+
+    spans = []
+    total = 0.0
+    for length in _leg_lengths(legs):
+        spans.append((total, total + length, length))
+        total += length
+    if total <= 0:
+        return 0
+    travelled = total * max(0.0, min(1.0, float(progress or 0.0)))
+    for index, (start, end, length) in enumerate(spans):
+        if length > 0 and travelled < end:
+            return index
+    return len(legs) - 1
 
 
 def _asset_lookup(assets):
@@ -253,7 +321,6 @@ def _mission_rows(mission, now, buffer_mins, lookup, allowed_unit_ids=None):
     dependency = _resolved_dependency(mission)
     dependency_ready = not dependency.get("enabled") or dependency.get("satisfied")
     closed = mission.status == "cancelled"
-    completed = mission.status == "completed" or bool(detail.actual_arrival)
     held = bool(mission.is_held)
     try:
         formation = formation_rules.analyze_instance(
@@ -287,6 +354,21 @@ def _mission_rows(mission, now, buffer_mins, lookup, allowed_unit_ids=None):
                 list(plane.itineraries.all())
                 if hasattr(plane.itineraries, "all")
                 else list(plane.itineraries)
+            )
+            final_leg = legs[-1] if legs else None
+            # A landing at an intermediate stop does not close the mission: the
+            # remaining legs still have to be flown. Completion needs that
+            # aircraft's last leg to be arrived, an explicitly completed
+            # mission, or -- for an older plan saved without itineraries -- the
+            # mission-level arrival time.
+            final_landed = bool(
+                final_leg
+                and (
+                    final_leg.toot if final_leg.overflight else final_leg.ata
+                )
+            )
+            completed = mission.status == "completed" or (
+                final_landed if legs else bool(detail.actual_arrival)
             )
             etd = next((leg.etd for leg in legs if leg.etd), None)
             etd = etd or detail.scheduled_departure or mission.start_at
@@ -397,6 +479,97 @@ def _mission_rows(mission, now, buffer_mins, lookup, allowed_unit_ids=None):
                     status = "arrived"
                     reason = "Simulated arrival time reached at the destination."
 
+            # The board owns the actuals; the simulation only fills the gaps.
+            # Once any leg has a recorded departure or landing, the aircraft is
+            # drawn only along the leg it is on: a landed leg parks it at that
+            # stop until the next departure is recorded, and elapsed time alone
+            # never carries it past a stop the board has already closed.
+            recorded_legs = any(
+                _leg_window(leg)[0] or _leg_window(leg)[1] for leg in legs
+            )
+            current_index = _current_leg_index(legs, progress)
+            if recorded_legs and points and current_index is not None:
+                lengths = _leg_lengths(legs)
+                span_total = sum(lengths)
+                leg = legs[current_index]
+                departed, finished = _leg_window(leg)
+                # Timing is anchored to the leg the aircraft is on: the actual
+                # departure from that leg's origin plus the leg's own flight
+                # time. A late takeoff therefore moves the ETA instead of
+                # leaving a stale mission-level estimate on the card.
+                leg_departure = (
+                    (leg.tot if leg.overflight else leg.atd)
+                    or leg.etd
+                    or simulation_start
+                )
+                leg_minutes = None
+                if leg.etd and leg.eta and leg.eta > leg.etd:
+                    leg_minutes = (leg.eta - leg.etd).total_seconds() / 60
+                elif lengths and lengths[current_index] and speed_knots:
+                    leg_minutes = (
+                        lengths[current_index]
+                        / (float(speed_knots) * 1.852)
+                        * 60
+                    )
+                leg_fraction = 0.0
+                if leg_departure and leg_minutes is not None:
+                    arrival_at = leg_departure + dt.timedelta(
+                        minutes=float(leg_minutes) + buffer_mins
+                    )
+                    leg_total = float(leg_minutes) + buffer_mins
+                    elapsed_minutes = _minutes(
+                        (now - leg_departure).total_seconds() / 60
+                    )
+                    if finished:
+                        leg_fraction = 1.0
+                    elif departed and leg_total > 0:
+                        leg_fraction = max(
+                            0.0, min(1.0, elapsed_minutes / leg_total)
+                        )
+                    remaining_to_arrival = _minutes(
+                        (arrival_at - now).total_seconds() / 60
+                    )
+                    remaining_enroute = _minutes(
+                        (
+                            leg_departure
+                            + dt.timedelta(minutes=float(leg_minutes))
+                            - now
+                        ).total_seconds()
+                        / 60
+                    )
+                if span_total > 0:
+                    start_fraction = sum(lengths[:current_index]) / span_total
+                    end_fraction = (
+                        start_fraction + lengths[current_index] / span_total
+                    )
+                else:
+                    start_fraction, end_fraction = 0.0, 1.0
+                progress = start_fraction + (
+                    end_fraction - start_fraction
+                ) * leg_fraction
+                if points and segments:
+                    current, heading, traveled, remaining = _position_at(
+                        points, segments, distance, distance * progress
+                    )
+                can_report = status in {"planned", "en_route", "arrived"}
+                if can_report and not (closed or held or not dependency_ready):
+                    if finished and current_index == len(legs) - 1:
+                        status = "arrived"
+                        reason = "Landing recorded on the board."
+                    elif departed:
+                        status = "en_route"
+                        reason = (
+                            "In flight on this leg; the landing is recorded "
+                            "on the board."
+                        )
+                    elif current_index > 0:
+                        stop = legs[current_index - 1].destination or "the stop"
+                        status = "landed"
+                        reason = (
+                            f"Landed at {stop}; waiting for the next leg's "
+                            "departure."
+                        )
+
             if closed or held or not dependency_ready or status in {
                 "unavailable",
                 "timing_missing",
@@ -412,6 +585,47 @@ def _mission_rows(mission, now, buffer_mins, lookup, allowed_unit_ids=None):
                 current = points[-1]
                 traveled = [[point[0], point[1]] for point in points]
                 remaining = [list(current)]
+
+            # Each leg carries its own endpoints and times so the map can show
+            # that leg's itinerary details when an operator clicks its line.
+            # Geometry comes from the same coordinate lookup used for the
+            # whole route, so a clickable leg always matches the drawn track.
+            leg_rows = []
+            for leg_index, leg in enumerate(legs):
+                leg_points = [
+                    [round(point[0], 6), round(point[1], 6)]
+                    for point in (
+                        formation_rules.coordinates_from_location(leg.origin or ""),
+                        formation_rules.coordinates_from_location(
+                            leg.destination or ""
+                        ),
+                    )
+                    if point is not None
+                ]
+                leg_rows.append(
+                    {
+                        "id": leg.pk,
+                        "sequence": leg_index + 1,
+                        "origin": leg.origin or "",
+                        "destination": leg.destination or "",
+                        "point_role": getattr(leg, "point_role", "") or "",
+                        "mission": leg.mission or "",
+                        "overflight": bool(leg.overflight),
+                        "return_to_origin": bool(leg.return_to_origin),
+                        "status": leg.status,
+                        "etd": leg.etd,
+                        "eta": leg.eta,
+                        "atd": leg.atd,
+                        "ata": leg.ata,
+                        "tot": leg.tot,
+                        "toot": leg.toot,
+                        "points": leg_points,
+                    }
+                )
+
+            current_leg = (
+                leg_rows[current_index] if current_index is not None else None
+            )
 
             opcon = getattr(asset, "opcon_unit", None)
             mission_type = (
@@ -482,6 +696,8 @@ def _mission_rows(mission, now, buffer_mins, lookup, allowed_unit_ids=None):
                     "planned_route": [[point[0], point[1]] for point in points],
                     "traveled_route": traveled,
                     "remaining_route": remaining,
+                    "legs": leg_rows,
+                    "current_leg": current_leg,
                     "route_distance_km": round(distance, 3),
                     "status": status,
                     "status_label": _status_label(status),

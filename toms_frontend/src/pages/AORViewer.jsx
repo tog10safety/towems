@@ -7,6 +7,7 @@ import {
   Popup,
   ZoomControl,
   useMap,
+  useMapEvents,
 } from "react-leaflet";
 import { Button, Loading, StatusBadge } from "../components/ui.jsx";
 import BasemapControl from "../components/map/BasemapControl.jsx";
@@ -27,8 +28,19 @@ import {
 } from "../map/config.js";
 import { useTheme } from "../theme/ThemeContext.jsx";
 import { formatDateTime } from "../utils/format.js";
+import {
+  FuelGlyph,
+  FuelPopup,
+  fuelMarker,
+  groupFuelPlaces,
+} from "../map/fuel.jsx";
 
 const DEFAULT_CENTER = [12.8797, 121.774];
+//: Two pins closer than this many screen pixels are one mark and cluster. The
+//: tolerance is therefore recomputed from the zoom: far apart on the ground the
+//: zoomed-out view cannot separate them, while zooming into the camp spreads
+//: them into their own seals.
+const PLACE_TOLERANCE_PIXELS = 14;
 const AIR_UNIT_OFFSETS = [
   [0, -34],
   [34, 0],
@@ -49,17 +61,21 @@ const AIR_UNIT_OFFSETS = [
  */
 export default function AORViewer() {
   const { resolvedTheme } = useTheme();
-  const picture = useApi("/gis/operational-picture/?layers=aor,units,vehicles");
+  const picture = useApi(
+    "/gis/operational-picture/?layers=aor,units,vehicles,fuel"
+  );
   const config = useApi("/map/config/");
   const airAssets = useApi("/inventory/air-assets/?page_size=200");
 
   const [visible, setVisible] = useState({
     units: true,
-    vehicles: true,
-    air: true,
+    vehicles: false,
+    air: false,
+    fuel: false,
   });
   const [openTool, setOpenTool] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
+  const [zoom, setZoom] = useState(6);
   const [basemapId, setBasemapId] = useState(() =>
     readStored(BASEMAP_STORAGE_KEY, "")
   );
@@ -95,6 +111,20 @@ export default function AORViewer() {
       ),
     [airAssets.data]
   );
+  // The operational-picture endpoint is already scoped to the caller's unit
+  // and subordinates; this keeps a store outside the scope out of the layer.
+  const fuelPositions = useMemo(
+    () =>
+      (picture.data?.fuel_positions ?? []).filter((position) =>
+        scopeIds.has(position.unit_id)
+      ),
+    [picture.data, scopeIds]
+  );
+  // One pin per place, each carrying its own batch table.
+  const fuelPlaces = useMemo(
+    () => groupFuelPlaces(fuelPositions),
+    [fuelPositions]
+  );
   const airTypeRows = useMemo(
     () =>
       AIR_ASSET_TYPE_GROUPS.map((group) => ({
@@ -113,47 +143,83 @@ export default function AORViewer() {
       .sort();
     return times[times.length - 1] || "";
   }, [locatedAirAssets]);
-  // A unit seal and one or more aircraft can share the same point. A numbered
-  // cluster pin stands in until selected, then each pin is spread on a ring so
-  // both can be opened without losing the stored coordinate.
+  // Any pins sharing a point cluster under one numbered pin: two aircraft of
+  // the same type parked together, a unit seal under an aircraft, or both. A
+  // numbered cluster pin stands in until selected, then each pin is spread on a
+  // ring so every one can be opened without losing the stored coordinate.
   const overlapGroups = useMemo(() => {
-    const groups = new Map();
-    const groupFor = (key, latitude, longitude) => {
-      if (!key) return null;
-      let group = groups.get(key);
-      if (!group) {
-        group = {
-          key,
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          units: [],
-          air: [],
-        };
-        groups.set(key, group);
-      }
+    const groups = [];
+    // One pixel at this zoom and latitude, in degrees: Leaflet's Web Mercator
+    // resolution at equator is 156543.03392 m/px, shrinking by 2^zoom, and a
+    // degree of latitude is ~111.32 km. The tolerance is a few marker widths.
+    const latitude = Number(
+      picture.data?.center?.latitude ?? units[0]?.latitude ?? 12.88
+    );
+    const metresPerPixel =
+      (156543.03392 * Math.cos((latitude * Math.PI) / 180)) / 2 ** zoom;
+    const tolerance =
+      (PLACE_TOLERANCE_PIXELS * metresPerPixel) / 111320;
+    // Pins closer than that are the same mark on screen; grouping by exact
+    // coordinate left the second seal underneath the first, so its name could
+    // never be opened.
+    const near = (group, unitLatitude, unitLongitude) =>
+      Math.abs(group.latitude - unitLatitude) <= tolerance &&
+      Math.abs(group.longitude - unitLongitude) <= tolerance;
+    const placeFor = (latitude, longitude) => {
+      const lat = Number(latitude);
+      const lon = Number(longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+      const existing = groups.find((group) => near(group, lat, lon));
+      if (existing) return existing;
+      const group = {
+        key: `${lat.toFixed(5)},${lon.toFixed(5)}`,
+        latitude: lat,
+        longitude: lon,
+        units: [],
+        air: [],
+      };
+      groups.push(group);
       return group;
     };
 
-    for (const unit of units) {
-      const key = coordinateKey(unit.latitude, unit.longitude);
-      groupFor(key, unit.latitude, unit.longitude)?.units.push(unit);
+    // Only the layers actually drawn can overlap: hiding the unit seals must
+    // not leave two aircraft stacked because a hidden seal shares their point.
+    if (visible.units) {
+      for (const unit of units) {
+        placeFor(unit.latitude, unit.longitude)?.units.push(unit);
+      }
     }
-    for (const asset of locatedAirAssets) {
-      const key = coordinateKey(
-        asset.map_location?.latitude,
-        asset.map_location?.longitude
-      );
-      groupFor(
-        key,
-        asset.map_location?.latitude,
-        asset.map_location?.longitude
-      )?.air.push(asset);
+    if (visible.air) {
+      for (const asset of locatedAirAssets) {
+        placeFor(
+          asset.map_location?.latitude,
+          asset.map_location?.longitude
+        )?.air.push(asset);
+      }
     }
 
-    return [...groups.values()].filter(
-      (group) => group.units.length > 0 && group.air.length > 0
-    );
-  }, [units, locatedAirAssets]);
+    // Sit the cluster among its members rather than on whichever pin happened
+    // to be read first.
+    for (const group of groups) {
+      const points = [
+        ...group.units.map((unit) => [unit.latitude, unit.longitude]),
+        ...group.air.map((asset) => [
+          asset.map_location?.latitude,
+          asset.map_location?.longitude,
+        ]),
+      ]
+        .map(([lat, lon]) => [Number(lat), Number(lon)])
+        .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+      if (points.length) {
+        group.latitude =
+          points.reduce((sum, [lat]) => sum + lat, 0) / points.length;
+        group.longitude =
+          points.reduce((sum, [, lon]) => sum + lon, 0) / points.length;
+      }
+    }
+
+    return groups.filter((group) => group.units.length + group.air.length > 1);
+  }, [units, locatedAirAssets, visible.units, visible.air, zoom, picture.data]);
   const overlapUnitIds = useMemo(
     () =>
       new Set(
@@ -165,7 +231,6 @@ export default function AORViewer() {
     () => new Set(overlapGroups.flatMap((group) => group.air.map((asset) => asset.id))),
     [overlapGroups]
   );
-  const groupingActive = visible.units && visible.air;
 
   function toggleLayer(layer) {
     setVisible((current) => ({ ...current, [layer]: !current[layer] }));
@@ -235,11 +300,20 @@ export default function AORViewer() {
     emptyLabel: "No mapped aircraft",
     timestamp: airUpdatedAt,
   });
+  const fuelState = layerState({
+    loading: picture.loading,
+    error: picture.error,
+    hasData: Boolean(picture.data),
+    count: fuelPlaces.length,
+    emptyLabel: "No mapped fuel",
+    timestamp: pictureUpdatedAt,
+  });
   const printLayerNames =
     [
       visible.units && `Unit Locations (${units.length})`,
       visible.vehicles && `Mobility Assets (${vehicles.length})`,
       visible.air && `Air Assets (${locatedAirAssets.length})`,
+      visible.fuel && `Fuel Locations (${fuelPlaces.length})`,
       aors.length > 0 && `AOR Boundaries (${aors.length})`,
     ]
       .filter(Boolean)
@@ -279,10 +353,12 @@ export default function AORViewer() {
             onError={(id) => setBasemapFailure(id)}
           />
           <ZoomControl position="bottomright" />
+          <TrackZoom onZoom={setZoom} />
           <FitToPicture
             picture={picture.data}
             vehicles={vehicles}
             airAssets={locatedAirAssets}
+            fuelPositions={fuelPositions}
           />
           <PrintMap />
 
@@ -310,16 +386,11 @@ export default function AORViewer() {
 
           {visible.units && (
             <UnitMarkerLayer
-              units={
-                groupingActive
-                  ? units.filter((unit) => !overlapUnitIds.has(unit.unit_id))
-                  : units
-              }
+              units={units.filter((unit) => !overlapUnitIds.has(unit.unit_id))}
             />
           )}
 
-          {groupingActive &&
-            overlapGroups.map((group) => (
+          {overlapGroups.map((group) => (
               <OverlapGroup
                 key={group.key}
                 group={group}
@@ -356,11 +427,23 @@ export default function AORViewer() {
               </Marker>
             ))}
 
+          {visible.fuel &&
+            fuelPlaces.map((place) => (
+              <Marker
+                key={`fuel-${place.key}`}
+                position={[Number(place.latitude), Number(place.longitude)]}
+                icon={fuelMarker(place)}
+                zIndexOffset={300000}
+              >
+                <Popup className="pol-popup" maxWidth={360} minWidth={240}>
+                  <FuelPopup place={place} />
+                </Popup>
+              </Marker>
+            ))}
+
           {visible.air &&
             locatedAirAssets
-              .filter(
-                (asset) => !groupingActive || !overlapAirIds.has(asset.id)
-              )
+              .filter((asset) => !overlapAirIds.has(asset.id))
               .map((asset) => {
                 return (
                 <Marker
@@ -446,6 +529,21 @@ export default function AORViewer() {
               </label>
               <LayerMeta state={airState} />
             </li>
+            <li className={`aor-layer-row ${visible.fuel ? "" : "is-hidden"}`}>
+              <label className="legend-toggle">
+                <input
+                  type="checkbox"
+                  checked={visible.fuel}
+                  onChange={() => toggleLayer("fuel")}
+                />
+                <span className="legend-icon" style={{ color: "#d97706" }}>
+                  <FuelGlyph />
+                </span>
+                <span>Fuel Locations</span>
+                <span className="hint">({fuelPlaces.length})</span>
+              </label>
+              <LayerMeta state={fuelState} />
+            </li>
             <li className="aor-viewer-boundary-row aor-layer-row">
               <span className="aor-layer-label">
                 <span className="legend-line" /> Unit AOR boundary
@@ -453,6 +551,13 @@ export default function AORViewer() {
               <LayerMeta state={aorState} />
             </li>
           </ul>
+
+          {picture.data?.boundary_scope === "all_units" && (
+            <p className="aor-viewer-note">
+              Boundaries and unit seals cover every unit — the Operations Center
+              watch. Mobility, air assets and fuel stay within your own scope.
+            </p>
+          )}
 
           {visible.air && airTypeRows.length > 0 && (
             <div className="aor-viewer-airtypes">
@@ -479,6 +584,14 @@ export default function AORViewer() {
           {airProblem && (
             <p className="aor-viewer-note">
               Air assets could not be loaded.
+            </p>
+          )}
+          {visible.fuel && picture.data?.fuel_without_position > 0 && (
+            <p className="aor-viewer-note">
+              {picture.data.fuel_without_position} fuel store
+              {picture.data.fuel_without_position === 1 ? "" : "s"} hold no
+              mapped position (no stored point, airfield or unit marker) and are
+              not drawn.
             </p>
           )}
           {visible.vehicles &&
@@ -600,9 +713,10 @@ function AirAssetPopup({ asset }) {
 }
 
 /**
- * One numbered pin for a unit and aircraft sharing a coordinate. Selecting it
- * opens the real unit seal and aircraft symbols in a ring around the point;
- * selecting the numbered pin again collapses them.
+ * One numbered pin for any two or more pins sharing a coordinate - two parked
+ * aircraft, a unit seal under an aircraft, or a whole mix. Selecting it opens
+ * the real symbols in a ring around the point; selecting the numbered pin
+ * again collapses them.
  */
 function OverlapGroup({ group, expanded, onToggle }) {
   const unitOffsets = {};
@@ -622,14 +736,16 @@ function OverlapGroup({ group, expanded, onToggle }) {
     <>
       <Marker
         position={[group.latitude, group.longitude]}
-        icon={overlapGroupIcon(members.length, expanded)}
+        icon={overlapGroupIcon(group, expanded)}
         zIndexOffset={2000000}
         eventHandlers={{ click: onToggle }}
       />
 
       {expanded && (
         <>
-          <UnitMarkerLayer units={group.units} offsets={unitOffsets} />
+          {group.units.length > 0 && (
+            <UnitMarkerLayer units={group.units} offsets={unitOffsets} />
+          )}
           {group.air.map((asset) => (
             <Marker
               key={`overlap-air-${asset.id}`}
@@ -651,19 +767,61 @@ function OverlapGroup({ group, expanded, onToggle }) {
   );
 }
 
-function overlapGroupIcon(count, expanded) {
+/**
+ * The unit that fronts a cluster: the mother unit, not the first pin listed.
+ * A member whose parent is also in the group is subordinate to that parent, so
+ * the one with no parent present is the highest unit at the place.
+ */
+function clusterLead(units) {
+  if (!units.length) return null;
+  const present = new Set(units.map((unit) => unit.unit_id));
+  return (
+    units.find(
+      (unit) => unit.unit_parent_id == null || !present.has(unit.unit_parent_id)
+    ) || units[0]
+  );
+}
+
+function overlapGroupIcon(group, expanded) {
+  const count = group.units.length + group.air.length;
   const label = expanded
-    ? "Collapse the overlapping unit and aircraft pins"
-    : `Show ${count} overlapping unit and aircraft pins`;
+    ? "Collapse the overlapping pins"
+    : `Show ${count} overlapping pins`;
+  const lead = clusterLead(group.units);
+  const size = 36;
+  const attributes = `role="button" aria-label="${label}" title="${label}"`;
+  const badge = `<span class="map-overlap-count">${count}</span>`;
+  let inner;
+  if (expanded) {
+    inner = `<span class="map-overlap-marker is-expanded" ${attributes}>−</span>`;
+  } else if (lead?.logo_url) {
+    // The unit's own seal identifies the place; the badge keeps the count.
+    inner =
+      `<span class="map-overlap-marker is-seal" ${attributes}>` +
+      `<span class="unit-pin"><img src="${escapeHtml(lead.logo_url)}" alt="" /></span>` +
+      `${badge}</span>`;
+  } else {
+    const fallback = lead
+      ? escapeHtml((lead.unit_acronym || lead.unit_name || "?").slice(0, 5))
+      : String(count);
+    inner = `<span class="map-overlap-marker" ${attributes}>${fallback}${badge}</span>`;
+  }
   return L.divIcon({
     className: "map-overlap-icon",
-    html:
-      `<span class="map-overlap-marker ${expanded ? "is-expanded" : ""}" ` +
-      `role="button" aria-label="${label}" title="${label}">` +
-      `${expanded ? "−" : count}</span>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
+    html: inner,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
+}
+
+function escapeHtml(text) {
+  return String(text ?? "").replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
+        character
+      ])
+  );
 }
 
 function AorToolButton({ label, active = false, onClick, children }) {
@@ -774,16 +932,21 @@ function LayerMeta({ state }) {
   );
 }
 
-function coordinateKey(latitude, longitude) {
-  if (latitude == null || longitude == null) return "";
-  return `${Number(latitude).toFixed(4)},${Number(longitude).toFixed(4)}`;
-}
-
 /**
  * Leaflet keeps its own size while the print stylesheet changes the frame.
  * Invalidating on both sides of the print dialog keeps the visible map and
  * tiles aligned with the page that is produced.
  */
+/** Feeds the map's zoom into the overlap tolerance, so pins separate on zoom. */
+function TrackZoom({ onZoom }) {
+  useMapEvents({
+    zoomend(event) {
+      onZoom(event.target.getZoom());
+    },
+  });
+  return null;
+}
+
 function PrintMap() {
   const map = useMap();
 
@@ -858,7 +1021,7 @@ function vehicleMarker(position) {
   });
 }
 
-function FitToPicture({ picture, vehicles, airAssets }) {
+function FitToPicture({ picture, vehicles, airAssets, fuelPositions }) {
   const map = useMap();
 
   useEffect(() => {
@@ -885,11 +1048,14 @@ function FitToPicture({ picture, vehicles, airAssets }) {
     for (const asset of airAssets ?? []) {
       extend(asset.map_location?.latitude, asset.map_location?.longitude);
     }
+    for (const store of fuelPositions ?? []) {
+      extend(store.latitude, store.longitude);
+    }
 
     if (bounds.isValid()) {
       map.fitBounds(bounds.pad(0.12), { maxZoom: 11, animate: false });
     }
-  }, [map, picture, vehicles, airAssets]);
+  }, [map, picture, vehicles, airAssets, fuelPositions]);
 
   return null;
 }
