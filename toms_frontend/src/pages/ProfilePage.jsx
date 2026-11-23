@@ -88,6 +88,7 @@ export default function ProfilePage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [onboardingBusy, setOnboardingBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [avatarVersion, setAvatarVersion] = useState(Date.now());
   const [signatureVersion, setSignatureVersion] = useState(Date.now());
   const avatarInput = useRef(null);
@@ -217,6 +218,33 @@ export default function ProfilePage() {
     }
   }
 
+  // Picking the wrong unit should not leave the person waiting on an
+  // Administrator: the request can be withdrawn, and nothing about the unit,
+  // the posts or the role has changed in the meantime.
+  async function cancelUnitChange() {
+    const confirmed = window.confirm(
+      "Withdraw your pending unit change request?\n\n" +
+        "Your unit and every post you hold stay exactly as they are. You can " +
+        "send a new request at any time."
+    );
+    if (!confirmed) return;
+    setActionError("");
+    setNotice("");
+    setCancelBusy(true);
+    try {
+      const updated = await api.post("/auth/profile/unit-change/cancel/", {});
+      setData(updated);
+      setNotice(
+        "Unit change request withdrawn. Your unit and posts are unchanged."
+      );
+      refresh();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
   async function completeOnboarding() {
     setOnboardingBusy(true);
     setActionError("");
@@ -282,6 +310,14 @@ export default function ProfilePage() {
             {data.unit_acronym || data.unit_name || "your current unit"} and keep
             every post you hold.
           </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={cancelUnitChange}
+            disabled={cancelBusy}
+          >
+            {cancelBusy ? "Withdrawing…" : "Withdraw request"}
+          </Button>
         </div>
       )}
 

@@ -436,7 +436,7 @@ class UnitChangeRequest(models.Model):
         (STATUS_PENDING, "Pending approval"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_REJECTED, "Declined"),
-        (STATUS_CANCELLED, "Replaced by a newer request"),
+        (STATUS_CANCELLED, "Cancelled"),
     ]
 
     requester = models.ForeignKey(

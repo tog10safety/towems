@@ -194,6 +194,55 @@ def request_unit_change(user, unit, *, note="", request=None):
     return row
 
 
+@transaction.atomic
+def cancel_request(user, *, request=None):
+    """Withdraw the caller's own pending move.
+
+    Nothing about the account changes either way; the request simply stops
+    waiting for a decision, so a person who picked the wrong unit is not stuck
+    until an Administrator gets to the queue. The pending bell items close
+    themselves, because a workflow that cannot be acted on must not sit in an
+    approver's action list.
+    """
+    from apps.ops.notifications import complete_action
+
+    row = (
+        UnitChangeRequest.objects.select_related("from_unit", "to_unit")
+        .filter(
+            requester_id=getattr(user, "id", None),
+            status=UnitChangeRequest.STATUS_PENDING,
+        )
+        .first()
+    )
+    if row is None:
+        raise UnitChangeError("You have no unit change request waiting for approval.")
+
+    row.status = UnitChangeRequest.STATUS_CANCELLED
+    row.decision_note = "Withdrawn by the requester."
+    row.save(update_fields=["status", "decision_note", "updated_at"])
+
+    complete_action(
+        related_type=RELATED_TYPE,
+        related_ids=[row.id],
+        note="The person withdrew this request.",
+        actor=user,
+    )
+
+    log_action(
+        actor=user,
+        action="cancel_unit_change",
+        entity_type=RELATED_TYPE,
+        entity_id=row.id,
+        before={
+            "status": UnitChangeRequest.STATUS_PENDING,
+            "to_unit_id": row.to_unit_id,
+        },
+        after={"status": row.status},
+        request=request,
+    )
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Deciding
 # ---------------------------------------------------------------------------

@@ -36,6 +36,12 @@ urlpatterns = [
     ),
     # Self-service profile (spec §3). No user id in the path on purpose.
     path("auth/profile/", profile.ProfileView.as_view(), name="auth-profile"),
+    # A person may withdraw their own waiting unit change request.
+    path(
+        "auth/profile/unit-change/cancel/",
+        views.UnitChangeCancelView.as_view(),
+        name="auth-profile-unit-change-cancel",
+    ),
     path(
         "auth/onboarding/complete/",
         profile.OnboardingCompleteView.as_view(),

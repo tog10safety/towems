@@ -396,6 +396,67 @@ def test_unit_change_is_requested_and_waits_for_an_administrator(
     assert profile["unit_change_request"]["id"] == request_row.id
 
 
+def test_a_person_can_withdraw_their_own_pending_unit_change(
+    api, login, creator, other_unit, admin
+):
+    """Picking the wrong unit is recoverable without waiting for a decision."""
+    from apps.accounts.models import UnitChangeRequest
+    from apps.ops.models import Notification
+
+    login(creator)
+    token = csrf_token(api)
+    requested = api.patch(
+        "/api/auth/profile/",
+        {"unit_id": other_unit.id},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert requested.status_code == 200, requested.content
+    request_id = requested.json()["unit_change_request"]["id"]
+
+    token = csrf_token(api)
+    withdrawn = api.post(
+        "/api/auth/profile/unit-change/cancel/",
+        {},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert withdrawn.status_code == 200, withdrawn.content
+    body = withdrawn.json()
+    assert body["unit_change_cancelled"] is True
+    assert body["unit_change_request"] is None
+    assert body["unit_id"] == creator.unit_id
+
+    request_row = UnitChangeRequest.objects.get(pk=request_id)
+    assert request_row.status == UnitChangeRequest.STATUS_CANCELLED
+    assert request_row.decision_note
+    # The person withdrew it; no approver decided it.
+    assert request_row.decided_by_id is None
+
+    creator.refresh_from_db()
+    assert creator.unit_id == request_row.from_unit_id
+    assert creator.authority == "Creator"
+
+    # The bell stops asking an Administrator to decide it.
+    item = Notification.objects.get(
+        recipient=admin,
+        related_type="unit_change_request",
+        related_id=str(request_id),
+    )
+    assert item.action_status == Notification.ACTION_COMPLETED
+
+    # Nothing is waiting any more, so a second withdrawal is refused.
+    token = csrf_token(api)
+    again = api.post(
+        "/api/auth/profile/unit-change/cancel/",
+        {},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert again.status_code == 400
+    assert "no unit change" in again.json()["detail"].lower()
+
+
 def test_administrator_approval_moves_the_person_and_ends_old_posts(
     api, login, creator, other_unit, admin
 ):

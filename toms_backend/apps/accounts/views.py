@@ -647,6 +647,32 @@ class UnitChangeRequestViewSet(viewsets.ReadOnlyModelViewSet):
         return self._decide(request, pk, approve=False)
 
 
+class UnitChangeCancelView(APIView):
+    """Withdraw the caller's own waiting unit change request.
+
+    There is no id in the path, so an account can only ever cancel the request
+    it raised. Nothing about the unit, the posts or the role changes: the ask
+    simply stops waiting, and its bell item closes. Picking the wrong unit is
+    the ordinary reason, so no reason is demanded.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from apps.accounts.profile import profile_payload
+        from apps.core.csrf import enforce_csrf
+
+        enforce_csrf(request)
+        try:
+            unit_changes.cancel_request(request.user, request=request)
+        except unit_changes.UnitChangeError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        payload = profile_payload(request.user)
+        payload["unit_change_cancelled"] = True
+        return Response(payload)
+
+
 class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
     """Administrator user management (spec §3).
 
