@@ -7,11 +7,13 @@ Design rules taken straight from the specification:
 * The permitted fields are an explicit allow-list. ``authority``, ``username``,
   ``serial_number`` and ``is_active`` are not on it, so role and administrative
   status cannot be changed through this route.
-* ``unit_id`` is the one exception: a person may move themselves. The move is
-  deliberately lossy - every post held in the unit being left is ended (unit
-  appointments, office/section assignments, acting authority) and no post is
-  created in the new unit, so the account is left with the Creator role only.
-  A transfer can therefore lower authority but never raise it.
+* ``unit_id`` is the one exception: a person may ask to move themselves. The
+  move is deliberately lossy - every post held in the unit being left is ended
+  (unit appointments, office/section assignments, acting authority) and no post
+  is created in the new unit, so the account is left with the Creator role only.
+  A transfer can therefore lower authority but never raise it. Because it is
+  destructive, it is recorded as a request and applied only after an
+  Administrator or the Super Administrator approves it.
 * Passwords never appear: the existing ``ChangePasswordView`` handles them.
 * ``password_hash`` is never serialised.
 """
@@ -31,7 +33,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts import mfa, ownership, setup_gate
+from apps.accounts import mfa, ownership, setup_gate, unit_changes
 from apps.accounts.models import UserProfile
 from apps.accounts.personnel_details import (
     PERSONNEL_DETAIL_FIELDS,
@@ -208,6 +210,12 @@ def profile_payload(user) -> dict:
         "signature_filename": saved_signature,
         "signature_url": f"/api/auth/profile/signature/" if saved_signature else "",
         "roles": sorted(roles.effective_roles(user)),
+        #: An outstanding move the person has asked for. Nothing has changed yet:
+        #: an Administrator or the Super Administrator decides it, and the bell
+        #: tells them it is waiting.
+        "unit_change_request": unit_changes.request_payload(
+            unit_changes.pending_for(user)
+        ),
         "appointments": appointments,
         "sections": sections,
         "editable_fields": list(SELF_EDITABLE_FIELDS),
@@ -223,7 +231,7 @@ def profile_payload(user) -> dict:
     }
 
 
-def change_unit(user, unit, *, request=None) -> dict:
+def change_unit(user, unit, *, request=None, actor=None) -> dict:
     """Move ``user`` to ``unit``, ending every post held in the old unit.
 
     The point of the transfer is that nothing follows the person across: the
@@ -236,6 +244,11 @@ def change_unit(user, unit, *, request=None) -> dict:
 
     from apps.command import services as command_services
     from apps.command.models import ActingAppointment, SectionAssignment, UnitAppointment
+
+    # The person moving is the actor when they act for themselves; an approval
+    # passes the deciding administrator instead, so the audit trail names the
+    # authority that actually ordered the move.
+    actor = actor or user
 
     with transaction.atomic():
         previous_unit = user.unit
@@ -254,14 +267,14 @@ def change_unit(user, unit, *, request=None) -> dict:
             for appointment in UnitAppointment.objects.filter(
                 user_id=user.id, unit_id=previous_unit_id, is_active=True
             ):
-                command_services.end_appointment(appointment, actor=user, reason=reason)
+                command_services.end_appointment(appointment, actor=actor, reason=reason)
                 ended_posts.append(appointment.role)
 
             assignments = SectionAssignment.objects.filter(
                 user_id=user.id, section__unit_id=previous_unit_id, is_active=True
             ).select_related("section")
             for assignment in assignments:
-                command_services.end_section_assignment(assignment, actor=user)
+                command_services.end_section_assignment(assignment, actor=actor)
                 ended_sections.append(assignment.section.code or assignment.section.name)
 
             for acting in ActingAppointment.objects.filter(
@@ -271,7 +284,7 @@ def change_unit(user, unit, *, request=None) -> dict:
                 revoked_at__isnull=True,
             ):
                 command_services.revoke_acting_appointment(
-                    acting, actor=user, reason="Unit transfer ended the delegation."
+                    acting, actor=actor, reason="Unit transfer ended the delegation."
                 )
                 revoked_acting.append(acting.acting_role)
 
@@ -283,7 +296,7 @@ def change_unit(user, unit, *, request=None) -> dict:
         user.save(update_fields=["unit", "unit_legacy", "authority"])
 
         log_action(
-            actor=user,
+            actor=actor,
             action="change_unit",
             entity_type="profile",
             entity_id=user.id,
@@ -360,9 +373,11 @@ class ProfileView(APIView):
         user = request.user
         profile = _profile_for(user)
 
-        # Moving unit: allowed, but it ends what the person held where they were
-        # and leaves them with no post in the new one.
-        unit_change: dict | None = None
+        # Moving unit: recorded as a request. It is not applied here - an
+        # Administrator or the Super Administrator decides, because approving it
+        # ends what the person held where they were and leaves them with no post
+        # in the new unit.
+        unit_request = None
         if UNIT_TRANSFER_FIELD in request.data:
             from apps.legacy.models import Unit
 
@@ -381,16 +396,12 @@ class ProfileView(APIView):
                     {UNIT_TRANSFER_FIELD: "That unit is not active."}
                 )
             if target_unit.id != user.unit_id:
-                if ownership.is_system_owner(user):
-                    raise ValidationError(
-                        {
-                            UNIT_TRANSFER_FIELD: (
-                                "The Super Administrator's unit is changed by another "
-                                "administrator, after handing the seat over."
-                            )
-                        }
+                try:
+                    unit_request = unit_changes.request_unit_change(
+                        user, target_unit, request=request
                     )
-                unit_change = change_unit(user, target_unit, request=request)
+                except unit_changes.UnitChangeError as exc:
+                    raise ValidationError({UNIT_TRANSFER_FIELD: str(exc)})
 
         before = {
             "contact_number": user.contact_number or "",
@@ -452,8 +463,10 @@ class ProfileView(APIView):
             request=request,
         )
         payload = profile_payload(user)
-        if unit_change:
-            payload["unit_change"] = unit_change
+        if unit_request is not None:
+            #: Tells the page the request was recorded now, rather than only on
+            #: a later GET, so it can confirm the submission to the person.
+            payload["unit_change_submitted"] = True
         return Response(payload)
 
 

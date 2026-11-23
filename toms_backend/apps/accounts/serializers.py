@@ -7,7 +7,13 @@ import re
 
 from rest_framework import serializers
 
-from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, User, UserProfile
+from apps.accounts.models import (
+    AUTHORITY_CHOICES,
+    CATEGORY_CHOICES,
+    UnitChangeRequest,
+    User,
+    UserProfile,
+)
 from apps.accounts.personnel_details import PERSONNEL_DETAIL_FIELDS, profile_dict
 
 PASSWORD_POLICY = {
@@ -817,3 +823,50 @@ class MFAChallengeSerializer(serializers.Serializer):
 
 class MFACodeSerializer(serializers.Serializer):
     code = serializers.CharField(trim_whitespace=False)
+
+
+class UnitChangeRequestSerializer(serializers.ModelSerializer):
+    """One request in the Administrator's review queue."""
+
+    requester_name = serializers.CharField(source="requester.full_name", read_only=True)
+    requester_username = serializers.CharField(source="requester.username", read_only=True)
+    requester_rank = serializers.CharField(source="requester.rank", read_only=True, default="")
+    requester_serial_number = serializers.CharField(
+        source="requester.serial_number", read_only=True, default=""
+    )
+    from_unit_acronym = serializers.CharField(source="from_unit.acronym", read_only=True, default="")
+    from_unit_name = serializers.CharField(source="from_unit.name", read_only=True, default="")
+    to_unit_acronym = serializers.CharField(source="to_unit.acronym", read_only=True, default="")
+    to_unit_name = serializers.CharField(source="to_unit.name", read_only=True, default="")
+    decided_by_name = serializers.CharField(
+        source="decided_by.full_name", read_only=True, default=""
+    )
+    decided_by_username = serializers.CharField(
+        source="decided_by.username", read_only=True, default=""
+    )
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = UnitChangeRequest
+        fields = [
+            "id",
+            "requester_id",
+            "requester_name",
+            "requester_username",
+            "requester_rank",
+            "requester_serial_number",
+            "from_unit_id",
+            "from_unit_acronym",
+            "from_unit_name",
+            "to_unit_id",
+            "to_unit_acronym",
+            "to_unit_name",
+            "status",
+            "status_label",
+            "requester_note",
+            "decision_note",
+            "decided_by_name",
+            "decided_by_username",
+            "decided_at",
+            "created_at",
+        ]

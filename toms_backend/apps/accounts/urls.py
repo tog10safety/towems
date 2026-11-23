@@ -7,6 +7,9 @@ from apps.accounts import presence, profile, views
 router = DefaultRouter()
 router.register("personnel", views.PersonnelViewSet, basename="personnel")
 router.register("admin/users", views.UserAdminViewSet, basename="admin-users")
+router.register(
+    "unit-changes", views.UnitChangeRequestViewSet, basename="unit-change"
+)
 
 urlpatterns = [
     path("auth/csrf/", views.CsrfTokenView.as_view(), name="auth-csrf"),

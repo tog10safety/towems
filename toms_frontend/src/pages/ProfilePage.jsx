@@ -15,14 +15,16 @@ import {
   Textarea,
 } from "../components/ui.jsx";
 import { useApi } from "../hooks/useApi.js";
+import { formatDateTime } from "../utils/format.js";
 
 /**
  * Self-service profile (spec §3).
  *
  * Only the fields the backend declares editable are rendered as inputs. Role and
- * status stay read-only. Unit is editable, but changing it is destructive and is
- * confirmed first: the server ends every post held in the unit being left and
- * leaves the account with the Creator role only in the new one.
+ * status stay read-only. Unit is selectable, but the change is only a request:
+ * an Administrator or the Super Administrator approves it through the bell, and
+ * the server applies it then. Approval ends every post held in the unit being
+ * left and leaves the account with the Creator role only in the new one.
  */
 const PROFILE_DETAIL_FIELDS = [
   "email",
@@ -127,19 +129,22 @@ export default function ProfilePage() {
       }
     }
 
-    // A unit move ends what the person held and cannot be undone from this
-    // page, so it is confirmed before anything is saved.
+    // A unit move is destructive and needs approval, so it is confirmed before
+    // anything is sent. The server records a request; the unit does not change
+    // until an Administrator or the Super Administrator approves it.
     const unitChanged =
       form.unit_id && String(form.unit_id) !== String(data.unit_id ?? "");
     if (unitChanged) {
       const target = unitOptions.find((row) => String(row.id) === String(form.unit_id));
       const label = target ? `${target.acronym} - ${target.name}` : "the selected unit";
       const confirmed = window.confirm(
-        `Move to ${label}?\n\n` +
-          "Every post you hold in your current unit will be ended, including office " +
-          "and section assignments and any acting authority.\n\n" +
+        `Send a request to move to ${label}?\n\n` +
+          "An Administrator or the Super Administrator must approve it. If " +
+          "approved, every post you hold in your current unit will be ended, " +
+          "including office and section assignments and any acting authority.\n\n" +
           "In the new unit you will hold no post: only the Creator role. An " +
-          "administrator there must appoint you again."
+          "administrator there must appoint you again.\n\n" +
+          "Your unit does not change until the request is approved."
       );
       if (!confirmed) return;
       payload.unit_id = Number(form.unit_id);
@@ -156,8 +161,9 @@ export default function ProfilePage() {
       setData(updated);
       if (unitChanged) {
         setNotice(
-          "Unit changed. Your posts in the previous unit were ended and you hold the " +
-            "Creator role only."
+          "Unit change request sent. An Administrator or the Super Administrator " +
+            "must approve it before your unit changes; your posts stay as they are " +
+            "until then."
         );
         refresh();
       } else {
@@ -237,6 +243,7 @@ export default function ProfilePage() {
     data.avatar_url &&
     data.has_signature &&
     emailOk;
+  const pendingUnitChange = data?.unit_change_request;
 
   if (loading && !data) return <Loading label="Loading your profile…" />;
 
@@ -261,6 +268,22 @@ export default function ProfilePage() {
 
       <ErrorBanner message={error || actionError} onRetry={error ? reload : undefined} />
       {notice && <div className="alert alert-success">{notice}</div>}
+
+      {pendingUnitChange && (
+        <div className="alert alert-warning">
+          <h2 style={{ marginTop: 0 }}>Unit change awaiting approval</h2>
+          <p>
+            You asked to move to{" "}
+            <strong>
+              {pendingUnitChange.to_unit_acronym} - {pendingUnitChange.to_unit_name}
+            </strong>{" "}
+            on {formatDateTime(pendingUnitChange.created_at)}. An Administrator or the
+            Super Administrator must approve it. Until then you remain in{" "}
+            {data.unit_acronym || data.unit_name || "your current unit"} and keep
+            every post you hold.
+          </p>
+        </div>
+      )}
 
       {(data?.profile_setup_required || data?.onboarding_required) && (
         <div className="alert alert-warning">
@@ -359,7 +382,7 @@ export default function ProfilePage() {
                   label="Unit"
                   className="span-2"
                   error={fieldErrors.unit_id}
-                  hint="Moving to another unit ends every post you hold in your current unit, including office/section assignments, and leaves you with the Creator role only in the new one."
+                  hint="Changing unit needs approval from an Administrator or the Super Administrator. Once approved, every post you hold in your current unit ends, including office/section assignments, and you keep the Creator role only in the new one."
                 >
                   <Select
                     value={form.unit_id}

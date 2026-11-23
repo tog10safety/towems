@@ -330,9 +330,13 @@ def test_signature_upload_writes_existing_column_and_serves(api, login, creator)
     assert not creator.signature_filename
 
 
-def test_moving_unit_ends_posts_and_leaves_creator_only(api, login, creator, other_unit):
-    """A unit move ends the old unit's posts and grants nothing in the new one."""
+def test_unit_change_is_requested_and_waits_for_an_administrator(
+    api, login, creator, other_unit, admin
+):
+    """Asking to move records a request and changes nothing yet."""
+    from apps.accounts.models import UnitChangeRequest
     from apps.command.models import OfficeSection, SectionAssignment, UnitAppointment
+    from apps.ops.models import Notification
 
     creator.authority = "Unit Safety Officer"
     creator.save(update_fields=["authority"])
@@ -356,23 +360,216 @@ def test_moving_unit_ends_posts_and_leaves_creator_only(api, login, creator, oth
     )
     assert response.status_code == 200, response.content
     body = response.json()
-    assert body["unit_id"] == other_unit.id
-    assert body["unit_change"]["unit_id"] == other_unit.id
-    # No post is created in the new unit: Creator, and nothing else.
-    assert body["authority"] == "Creator"
-    assert body["appointments"] == []
-    assert body["sections"] == []
+    # Nothing moved: the unit, the posts and the role are all unchanged.
+    assert body["unit_id"] == creator.unit_id
+    assert body["authority"] == "Unit Safety Officer"
+    assert body["unit_change_submitted"] is True
+    assert body["unit_change_request"]["status"] == "pending"
+    assert body["unit_change_request"]["to_unit_id"] == other_unit.id
+
+    creator.refresh_from_db()
+    assert creator.unit_id == post.unit_id
+    assert creator.authority == "Unit Safety Officer"
+    post.refresh_from_db()
+    assert post.is_active is True
+    assignment.refresh_from_db()
+    assert assignment.is_active is True
+
+    request_row = UnitChangeRequest.objects.get(
+        requester=creator, status=UnitChangeRequest.STATUS_PENDING
+    )
+    assert request_row.from_unit_id == creator.unit_id
+    assert request_row.to_unit_id == other_unit.id
+
+    # The bell carries the work item to every Administrator.
+    item = Notification.objects.get(
+        recipient=admin,
+        related_type="unit_change_request",
+        related_id=str(request_row.id),
+    )
+    assert item.requires_action is True
+    assert item.action_status == Notification.ACTION_OPEN
+    assert item.action_url == "/admin/unit-changes"
+
+    # The profile page shows the outstanding request.
+    profile = api.get("/api/auth/profile/").json()
+    assert profile["unit_change_request"]["id"] == request_row.id
+
+
+def test_administrator_approval_moves_the_person_and_ends_old_posts(
+    api, login, creator, other_unit, admin
+):
+    """Approving applies the original rule: old posts ended, Creator only."""
+    from apps.accounts.models import UnitChangeRequest
+    from apps.command.models import UnitAppointment
+    from apps.ops.models import Notification
+
+    creator.authority = "Unit Safety Officer"
+    creator.save(update_fields=["authority"])
+    post = UnitAppointment.objects.create(
+        unit=creator.unit, user=creator, role="safety_officer"
+    )
+
+    login(creator)
+    token = csrf_token(api)
+    requested = api.patch(
+        "/api/auth/profile/",
+        {"unit_id": other_unit.id},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert requested.status_code == 200, requested.content
+    request_id = requested.json()["unit_change_request"]["id"]
+
+    login(admin)
+    token = csrf_token(api)
+    decided = api.post(
+        f"/api/unit-changes/{request_id}/approve/",
+        {"note": "Approved for manning."},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert decided.status_code == 200, decided.content
+    assert decided.json()["status"] == UnitChangeRequest.STATUS_APPROVED
+    assert decided.json()["decided_by_username"] == admin.username
 
     creator.refresh_from_db()
     assert creator.unit_id == other_unit.id
     assert creator.unit_legacy == other_unit.name
     assert creator.authority == "Creator"
-
     post.refresh_from_db()
     assert post.is_active is False
     assert post.ended_at is not None
-    assignment.refresh_from_db()
-    assert assignment.is_active is False
+
+    # The approver's bell item is closed by the workflow, not by reading it.
+    item = Notification.objects.get(
+        recipient=admin,
+        related_type="unit_change_request",
+        related_id=str(request_id),
+    )
+    assert item.action_status == Notification.ACTION_COMPLETED
+
+    # The requester is told the outcome.
+    outcome = Notification.objects.get(
+        recipient=creator,
+        related_type="unit_change_request",
+        related_id=str(request_id),
+    )
+    assert outcome.requires_action is False
+    assert "approved" in outcome.title.lower()
+
+
+def test_declining_a_unit_change_leaves_the_account_untouched(
+    api, login, creator, other_unit, admin
+):
+    from apps.accounts.models import UnitChangeRequest
+    from apps.ops.models import Notification
+
+    login(creator)
+    token = csrf_token(api)
+    requested = api.patch(
+        "/api/auth/profile/",
+        {"unit_id": other_unit.id},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert requested.status_code == 200, requested.content
+    request_id = requested.json()["unit_change_request"]["id"]
+
+    login(admin)
+    token = csrf_token(api)
+    decided = api.post(
+        f"/api/unit-changes/{request_id}/reject/",
+        {"note": "No vacancy in that unit."},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert decided.status_code == 200, decided.content
+    assert decided.json()["status"] == UnitChangeRequest.STATUS_REJECTED
+    assert decided.json()["decision_note"] == "No vacancy in that unit."
+
+    creator.refresh_from_db()
+    assert creator.unit_id != other_unit.id
+    assert creator.authority == "Creator"
+
+    item = Notification.objects.get(
+        recipient=creator,
+        related_type="unit_change_request",
+        related_id=str(request_id),
+    )
+    assert "declined" in item.title.lower()
+    assert "No vacancy" in item.message
+
+
+def test_declining_requires_a_reason(api, login, creator, other_unit, admin):
+    from apps.accounts.models import UnitChangeRequest
+
+    request_row = UnitChangeRequest.objects.create(
+        requester=creator, from_unit=creator.unit, to_unit=other_unit
+    )
+
+    login(admin)
+    token = csrf_token(api)
+    response = api.post(
+        f"/api/unit-changes/{request_row.id}/reject/",
+        {},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 400
+    assert "reason" in response.json()["detail"].lower()
+
+    request_row.refresh_from_db()
+    assert request_row.status == UnitChangeRequest.STATUS_PENDING
+
+
+def test_only_administrators_can_review_unit_changes(api, login, creator, other_unit):
+    from apps.accounts.models import UnitChangeRequest
+
+    request_row = UnitChangeRequest.objects.create(
+        requester=creator, from_unit=creator.unit, to_unit=other_unit
+    )
+
+    login(creator)
+    assert api.get("/api/unit-changes/").status_code == 403
+
+    token = csrf_token(api)
+    response = api.post(
+        f"/api/unit-changes/{request_row.id}/approve/",
+        {},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 403
+
+    request_row.refresh_from_db()
+    assert request_row.status == UnitChangeRequest.STATUS_PENDING
+
+
+def test_administrators_cannot_decide_their_own_unit_change(
+    api, login, admin, other_unit
+):
+    from apps.accounts.models import UnitChangeRequest
+
+    request_row = UnitChangeRequest.objects.create(
+        requester=admin, from_unit=admin.unit, to_unit=other_unit
+    )
+
+    login(admin)
+    token = csrf_token(api)
+    response = api.post(
+        f"/api/unit-changes/{request_row.id}/approve/",
+        {},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    assert response.status_code == 400
+    assert "your own" in response.json()["detail"].lower()
+
+    admin.refresh_from_db()
+    request_row.refresh_from_db()
+    assert admin.unit_id != other_unit.id
+    assert request_row.status == UnitChangeRequest.STATUS_PENDING
 
 
 def test_moving_to_the_same_unit_changes_nothing(api, login, creator):
@@ -385,7 +582,8 @@ def test_moving_to_the_same_unit_changes_nothing(api, login, creator):
         HTTP_X_CSRFTOKEN=token,
     )
     assert response.status_code == 200, response.content
-    assert "unit_change" not in response.json()
+    assert response.json()["unit_change_request"] is None
+    assert "unit_change_submitted" not in response.json()
 
 
 def test_super_administrator_cannot_move_itself(api, login, seat_admin):

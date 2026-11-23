@@ -106,6 +106,12 @@ const NAV_GROUPS = [
       { to: "/reports", label: "Reports", icon: "reports" },
       { to: "/audit", label: "Audit Trail", icon: "audit", permission: "view_audit_log" },
       { to: "/admin/users", label: "User Management", icon: "users", permission: "manage_users" },
+      {
+        to: "/admin/unit-changes",
+        label: "Unit Change Requests",
+        icon: "users",
+        permission: "manage_users",
+      },
     ],
   },
 ];

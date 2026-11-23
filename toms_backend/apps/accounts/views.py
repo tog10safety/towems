@@ -21,8 +21,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts import mfa, ownership, setup_gate
-from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, User
+from apps.accounts import mfa, ownership, setup_gate, unit_changes
+from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, UnitChangeRequest, User
 from apps.accounts.models import PasswordResetToken
 from apps.accounts.serializers import (
     AdminUserSerializer,
@@ -33,6 +33,7 @@ from apps.accounts.serializers import (
     MFAChallengeSerializer,
     PasswordResetCompleteSerializer,
     PersonnelWriteSerializer,
+    UnitChangeRequestSerializer,
     UserSummarySerializer,
 )
 from apps.core import roles
@@ -597,6 +598,53 @@ class RoleCatalogueView(APIView):
                 "exclusive_roles": list(roles.EXCLUSIVE_APPOINTMENT_ROLES),
             }
         )
+
+
+class UnitChangeRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """The Administrator's queue of unit transfers awaiting a decision.
+
+    A person asks for a move on their own profile; it is never applied there.
+    An Administrator or the Super Administrator approves or declines it, and
+    the decision applies the transfer (approve) or leaves the account untouched
+    (decline). Requests are never deleted: the row is the record of who asked,
+    who decided, when and why.
+    """
+
+    permission_classes = [IsAuthenticated, IsUserAdministrator]
+    serializer_class = UnitChangeRequestSerializer
+    http_method_names = ["get", "post", "head", "options"]
+    filterset_fields = ["status"]
+    ordering = ["-created_at", "-id"]
+
+    def get_queryset(self):
+        return UnitChangeRequest.objects.select_related(
+            "requester", "from_unit", "to_unit", "decided_by"
+        )
+
+    def _decide(self, request, pk, *, approve: bool):
+        enforce_csrf(request)
+        row = self.get_object()
+        note = (request.data.get("note") or "").strip()
+        try:
+            if approve:
+                row = unit_changes.approve_request(
+                    row, actor=request.user, note=note, request=request
+                )
+            else:
+                row = unit_changes.reject_request(
+                    row, actor=request.user, note=note, request=request
+                )
+        except unit_changes.UnitChangeError as exc:
+            raise ValidationError({"detail": str(exc)})
+        return Response(self.get_serializer(row).data)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        return self._decide(request, pk, approve=True)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        return self._decide(request, pk, approve=False)
 
 
 class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):

@@ -7463,7 +7463,13 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ["-created_at", "-id"]
 
     #: Related types whose completion is driven by a workflow, not by the bell.
-    WORKFLOW_BACKED = {"instruction", "mission", "mrm_form", "inventory_request"}
+    WORKFLOW_BACKED = {
+        "instruction",
+        "mission",
+        "mrm_form",
+        "inventory_request",
+        "unit_change_request",
+    }
 
     def get_queryset(self):
         queryset = Notification.objects.select_related("created_by").filter(

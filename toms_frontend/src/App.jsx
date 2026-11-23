@@ -41,6 +41,9 @@ const RiskDetailPage = lazy(() => import("./pages/RiskDetailPage.jsx"));
 const RiskPage = lazy(() => import("./pages/RiskPage.jsx"));
 const SafetyAuditPage = lazy(() => import("./pages/SafetyAuditPage.jsx"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.jsx"));
+const UnitChangeRequestsPage = lazy(() =>
+  import("./pages/UnitChangeRequestsPage.jsx")
+);
 const UnitsPage = lazy(() => import("./pages/UnitsPage.jsx"));
 const UserManagementPage = lazy(() =>
   import("./pages/UserManagementPage.jsx")
@@ -165,6 +168,10 @@ export default function App() {
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="admin/users" element={<UserManagementPage />} />
+        <Route
+          path="admin/unit-changes"
+          element={<UnitChangeRequestsPage />}
+        />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="audit" element={<AuditPage />} />
       </Route>

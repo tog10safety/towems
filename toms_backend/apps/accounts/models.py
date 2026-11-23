@@ -412,3 +412,91 @@ class MFARecoveryCode(models.Model):
 
     def __str__(self) -> str:
         return f"Recovery code for user {self.mfa_id} (used={bool(self.used_at)})"
+
+
+class UnitChangeRequest(models.Model):
+    """A person's request to move to another unit, awaiting a decision.
+
+    A transfer is destructive: every post held in the unit being left is ended
+    and the account is reset to the Creator role. It is therefore never applied
+    on request. The row stays ``pending`` until an Administrator or the Super
+    Administrator approves or declines it; they are told through the
+    notification bell (``ops_notification``).
+
+    Only one request may be pending per person - the partial unique constraint
+    below enforces that in the database - so the review queue cannot collect
+    duplicate asks from the same account.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending approval"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Declined"),
+        (STATUS_CANCELLED, "Replaced by a newer request"),
+    ]
+
+    requester = models.ForeignKey(
+        "accounts.User",
+        db_column="requester_id",
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="unit_change_requests",
+    )
+    #: The unit the person held when the request was raised. Kept even if the
+    #: account later moves, so the decision records what was actually left.
+    from_unit = models.ForeignKey(
+        "legacy.Unit",
+        db_column="from_unit_id",
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="+",
+    )
+    to_unit = models.ForeignKey(
+        "legacy.Unit",
+        db_column="to_unit_id",
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="+",
+    )
+    status = models.CharField(
+        max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING
+    )
+    requester_note = models.TextField(blank=True, default="")
+    decision_note = models.TextField(blank=True, default="")
+    decided_by = models.ForeignKey(
+        "accounts.User",
+        db_column="decided_by_id",
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounts_unit_change_request"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["requester"],
+                condition=models.Q(status="pending"),
+                name="acct_unit_change_one_pending",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "created_at"], name="acct_unit_change_status_idx"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Unit change {self.pk} ({self.status})"

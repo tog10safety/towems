@@ -21,7 +21,13 @@ const TABS = [
   { value: "", label: "All" },
 ];
 
-const WORKFLOW_BACKED = new Set(["instruction", "mission", "mrm_form", "inventory_request"]);
+const WORKFLOW_BACKED = new Set([
+  "instruction",
+  "mission",
+  "mrm_form",
+  "inventory_request",
+  "unit_change_request",
+]);
 
 export default function NotificationsPage() {
   const [scope, setScope] = useState("action");
