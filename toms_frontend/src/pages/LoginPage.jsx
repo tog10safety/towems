@@ -278,6 +278,11 @@ export default function LoginPage() {
           )}
         </section>
       </main>
+
+      <p className="login-copyright">
+        © 2026 TOWEMS – Developed by SSg Noche PAF, 2026 Metrobank Foundation
+        Outstanding Filipino | All Rights Reserved.
+      </p>
     </div>
   );
 }
