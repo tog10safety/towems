@@ -310,6 +310,13 @@ function StopTimeline({ stops, supersededIds }) {
               : `Planned ${formatDateTime(
                   stop.planned_arrival || stop.planned_departure
                 )}`;
+        // The position recorded with the tap, so a monitor reads where the
+        // driver actually was rather than only when they said it happened.
+        const position = skipped
+          ? null
+          : stop.status === "departed"
+            ? stop.departed_position
+            : stop.arrived_position;
         const state = skipped
           ? "Skipped"
           : stop.status === "departed"
@@ -325,7 +332,21 @@ function StopTimeline({ stops, supersededIds }) {
               <strong>
                 {stop.sequence}. {stop.location_name}
               </strong>
-              <p className="hint">{when}</p>
+              <p className="hint">
+                {when}
+                {position && (
+                  <>
+                    {" · tapped at "}
+                    <span
+                      className="stop-tap-position"
+                      title={`${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}`}
+                    >
+                      {position.mgrs ||
+                        `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}`}
+                    </span>
+                  </>
+                )}
+              </p>
             </div>
             <span className={`driver-stop-state is-${skipped ? "skipped" : stop.status}`}>
               {state}
@@ -642,13 +663,14 @@ export default function DriverTrackingPage() {
     };
   }, [streaming, keepAwake]);
 
-  async function record(run, action, stop) {
+  async function record(run, action, stop, { force = false } = {}) {
     setBusy(`${run.id}:${action}:${stop?.id ?? ""}`);
     setFailure("");
     setMessage("");
     try {
       const payload = { run: run.id, action };
       if (stop) payload.stop = stop.id;
+      if (force) payload.force = true;
       const next = await api.post(`/missions/${id}/tracking/event/`, payload);
       setData(next);
       setMessage(
@@ -659,6 +681,20 @@ export default function DriverTrackingPage() {
             : `${stop.location_name}: ${action === "arrive_stop" ? "arrival" : "departure"} recorded.`
       );
     } catch (err) {
+      // An arrival is checked against this phone's last fix. When the server
+      // refuses it, the driver may record it anyway - the distance goes into the
+      // movement log and the Operations Center is told.
+      const override = err.payload?.errors?.override;
+      if (action === "arrive_stop" && override && !force) {
+        if (
+          window.confirm(
+            `${err.message}\n\nRecord the arrival anyway? It is logged as unverified and the Operations Center is told.`
+          )
+        ) {
+          await record(run, action, stop, { force: true });
+          return;
+        }
+      }
       setFailure(err.message || "That movement could not be recorded.");
     } finally {
       setBusy("");

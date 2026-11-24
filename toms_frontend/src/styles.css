@@ -4320,6 +4320,12 @@ body.map-fullscreen-open {
   gap: 8px;
 }
 
+/* The grid reference of the tap, beside the time the tap recorded. */
+.stop-tap-position {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .stop-row {
   display: flex;
   align-items: center;
@@ -7141,6 +7147,25 @@ textarea:focus-visible {
 /* The "you" marker sits at the end of the row. */
 .presence-row .badge {
   margin-left: auto;
+}
+
+/* On a phone the top bar leaves no room for a 380px popover hanging to the left
+   of its own button: part of the list fell outside the screen. Pin the panel to
+   the right edge of the viewport instead, so the whole list is readable. */
+@media (max-width: 640px) {
+  .presence-panel {
+    position: fixed;
+    top: 64px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: calc(100vh - 76px);
+    overflow-y: auto;
+  }
+
+  .presence-panel .presence-list {
+    max-height: none;
+  }
 }
 
 /* ---------- Sign-in screen ---------- */

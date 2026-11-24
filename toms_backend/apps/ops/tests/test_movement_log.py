@@ -103,7 +103,7 @@ def test_a_missed_stop_is_reported_to_the_monitoring_roles(
     mission, _trip, _vehicle, origin, destination = late_mission
     run = started(mission, planner)
     # The origin was reached late; the destination is now overdue.
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=2))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=2))
 
     created = tracking.alert_delays(mission, planner)
 
@@ -125,7 +125,7 @@ def test_the_same_delay_is_reported_once(
 ):
     mission, _trip, _vehicle, origin, _destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=2))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=2))
 
     assert tracking.alert_delays(mission, planner) >= 1
     assert tracking.alert_delays(mission, planner) == 0
@@ -161,8 +161,8 @@ def test_a_punctual_vehicle_is_not_called_late(
     """Times recorded at the planned moment are on time, however old the plan."""
     mission, _trip, _vehicle, origin, destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=3))
-    tracking.arrive_stop(run, destination, driver, at=timeutils.now() - dt.timedelta(hours=1))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=3))
+    tracking.arrive_stop(run, destination, driver, force=True, at=timeutils.now() - dt.timedelta(hours=1))
 
     report = tracking.delay_for_run(run, now=timeutils.now())
 
@@ -175,7 +175,7 @@ def test_early_departure_is_never_reported_as_behind_plan(
 ):
     mission, _trip, _vehicle, origin, _destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=4))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=4))
 
     report = tracking.delay_for_run(run, now=timeutils.now() - dt.timedelta(hours=2, minutes=30))
 
@@ -186,7 +186,7 @@ def test_early_departure_is_never_reported_as_behind_plan(
 def test_the_board_exposes_the_delay_beside_the_plan(as_user, late_mission, planner, driver):
     mission, _trip, _vehicle, origin, _destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=2))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=2))
 
     body = as_user(planner).get(f"/api/missions/{mission.id}/tracking/").json()
 
@@ -202,7 +202,7 @@ def test_the_scheduled_sweep_reports_active_missions(
 ):
     mission, _trip, _vehicle, origin, _destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=2))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=2))
 
     call_command("check_vehicle_delays")
 
@@ -219,7 +219,7 @@ def test_the_scheduled_sweep_reports_active_missions(
 def test_the_movement_log_pdf_renders_the_actual_record(as_user, late_mission, planner, driver):
     mission, _trip, _vehicle, origin, _destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=2))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=2))
 
     response = as_user(planner).get(f"/api/missions/{mission.id}/tracking/log/")
 
@@ -283,7 +283,7 @@ def test_the_movement_log_excludes_cancelled_vehicles_from_the_delay_board(
 ):
     mission, _trip, _vehicle, origin, _destination = late_mission
     run = started(mission, planner)
-    tracking.arrive_stop(run, origin, driver, at=timeutils.now() - dt.timedelta(hours=2))
+    tracking.arrive_stop(run, origin, driver, force=True, at=timeutils.now() - dt.timedelta(hours=2))
     VehicleRun.objects.filter(pk=run.pk).update(status=VehicleRun.STATUS_CANCELLED)
 
     report = tracking.delay_for_run(VehicleRun.objects.get(pk=run.pk))

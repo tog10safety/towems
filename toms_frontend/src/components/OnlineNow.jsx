@@ -73,7 +73,7 @@ export default function OnlineNow() {
       {open && (
         <>
           <div className="bell-backdrop" onClick={() => setOpen(false)} />
-          <div className="bell-panel" role="menu">
+          <div className="bell-panel presence-panel" role="menu">
             <header className="bell-head">
               <strong className="presence-head-title">
                 <span className="presence-dot" aria-hidden="true" />

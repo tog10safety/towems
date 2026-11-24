@@ -1221,6 +1221,19 @@ class TrackingPingSerializer(serializers.ModelSerializer):
         ]
 
 
+def _tap_position(event):
+    """Where the phone was when the driver tapped, as the event recorded it."""
+    if event is None or event.latitude is None or event.longitude is None:
+        return None
+    from apps.core.mgrs import to_mgrs
+
+    try:
+        grid = to_mgrs(event.latitude, event.longitude)
+    except Exception:  # pragma: no cover - a bad coordinate is not worth a 500
+        grid = ""
+    return {"latitude": event.latitude, "longitude": event.longitude, "mgrs": grid}
+
+
 class VehicleRunSerializer(serializers.ModelSerializer):
     trip_number = serializers.CharField(source="trip.trip_number", read_only=True)
     trip_status = serializers.CharField(source="trip.status", read_only=True)
@@ -1339,6 +1352,10 @@ class VehicleRunSerializer(serializers.ModelSerializer):
                     "planned_departure": stop.planned_departure,
                     "arrived_at": arrival.actual_at if arrival else None,
                     "departed_at": departed_at,
+                    # The movement log is read for where the driver said they
+                    # were, so the tap's own position travels with the stop.
+                    "arrived_position": _tap_position(arrival),
+                    "departed_position": _tap_position(departure),
                     "arrival_source": arrival.source if arrival else "",
                     "departure_source": (
                         departure.source

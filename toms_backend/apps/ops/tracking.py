@@ -10,6 +10,7 @@ operational picture.
 from __future__ import annotations
 
 import datetime as dt
+import math
 
 from django.db import transaction
 from django.db.models import F, Subquery, Window
@@ -640,8 +641,124 @@ def depart(run, actor, *, at=None):
     return run
 
 
+#: How far the driver's own last position may be from a stop and still count as
+#: being at it, for an arrival or a departure. Wide enough for a convoy halted
+#: across a camp gate or on a fix with poor accuracy, narrow enough that a stop
+#: in another town cannot be claimed by mistake. The fix's own accuracy is added.
+STOP_RADIUS_M = 300
+
+#: How recently the vehicle must have reported a position for a claim about being
+#: at a stop to be checked against it. An older fix is no evidence at all: the
+#: claim is recorded as unverified rather than judged near or far from the stop.
+FIX_MAX_AGE_SECONDS = 300
+
+
+def _distance_metres(first, second) -> float:
+    """Great-circle distance between two ``(latitude, longitude)`` pairs."""
+    lat1, lon1 = math.radians(first[0]), math.radians(first[1])
+    lat2, lon2 = math.radians(second[0]), math.radians(second[1])
+    a = (
+        math.sin((lat2 - lat1) / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    )
+    return 2 * 6371008.8 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _reported_position(run, stop) -> tuple[float | None, float | None, bool]:
+    """Where the driver was when they tapped, and whether it was reported.
+
+    Movement events keep the vehicle's own last fix, so the log says where the
+    driver actually was at the tap. A stop's coordinates are only a placeholder
+    for a phone that has never reported a position; the caller notes that.
+    """
+    if run.last_latitude is not None and run.last_longitude is not None:
+        return run.last_latitude, run.last_longitude, True
+    return stop.latitude, stop.longitude, False
+
+
+def _age_text(seconds) -> str:
+    if seconds >= 3600:
+        return f"{seconds / 3600:.1f} hours"
+    if seconds >= 90:
+        return f"{seconds / 60:.0f} minutes"
+    return f"{seconds:.0f} seconds"
+
+
+def _stop_fix(run, stop, *, at=None) -> tuple[float | None, float, float | None]:
+    """Distance from the stop to the vehicle's last fix, the allowed radius, age.
+
+    ``distance_m`` is None when the claim cannot be checked at all - the vehicle
+    has never reported a position, or the stop has none - which is never treated
+    as a match. ``age_s`` is None when no fix time is stored; the caller treats
+    an old or missing timestamp as unverified rather than as a pass.
+    """
+    allowed = STOP_RADIUS_M + max(0.0, float(run.last_accuracy_m or 0))
+    age = (
+        max(0.0, (_actual(at) - run.last_ping_at).total_seconds())
+        if run.last_ping_at is not None
+        else None
+    )
+    if (
+        run.last_latitude is None
+        or run.last_longitude is None
+        or stop.latitude is None
+        or stop.longitude is None
+    ):
+        return None, allowed, age
+    return (
+        _distance_metres(
+            (run.last_latitude, run.last_longitude), (stop.latitude, stop.longitude)
+        ),
+        allowed,
+        age,
+    )
+
+
+def _is_stale(age) -> bool:
+    return age is None or age > FIX_MAX_AGE_SECONDS
+
+
+def _unverified_note(opening, stop, distance, allowed, age):
+    if distance is None:
+        return (
+            f"{opening}: this vehicle has not reported a position at all; the claim "
+            "could not be verified."
+        )
+    parts = []
+    if distance is not None:
+        parts.append(
+            f"the last reported position was {distance / 1000:.2f} km from "
+            f"{stop.location_name} (accepted radius {allowed / 1000:.1f} km)"
+        )
+    parts.append(
+        f"{_age_text(age)} old (accepted age {FIX_MAX_AGE_SECONDS // 60} minutes)"
+        if age is not None
+        else "no position time was reported"
+    )
+    return f"{opening}: " + " and ".join(parts) + "; the claim could not be verified."
+
+
+def _mismatch_note(opening, stop, distance, allowed):
+    return (
+        f"{opening}: the last reported position was {distance / 1000:.2f} km from "
+        f"{stop.location_name} (accepted radius {allowed / 1000:.1f} km); the claim "
+        "does not match that position."
+    )
+
+
+def _raise_to_operations_center(run, actor, title, note):
+    """Put a claim that does not hold up in front of the Operations Center."""
+    _notify_monitors(
+        run.mission,
+        actor,
+        title=f"{title} · {run.mission.mission_number}",
+        message=note,
+        priority="high",
+    )
+
+
 @transaction.atomic
-def arrive_stop(run, stop, actor, *, at=None):
+def arrive_stop(run, stop, actor, *, at=None, force=False):
     if run.mission.status != "active":
         raise ValidationError({"detail": "This mission is not active."})
     if run.status != VehicleRun.STATUS_ACTIVE:
@@ -692,6 +809,57 @@ def arrive_stop(run, stop, actor, *, at=None):
                 {"detail": f"Stop {row.sequence} is already recorded out of order."}
             )
 
+    # The arrival is a claim; the vehicle's own last fix is the evidence for it,
+    # but only while that fix is recent enough to be evidence at all.
+    distance, allowed, age = _stop_fix(run, stop, at=at)
+    far = distance is not None and distance > allowed
+    stale = distance is not None and _is_stale(age)
+    if (distance is None or far or stale) and not force:
+        if distance is None:
+            detail = (
+                f"This vehicle has not reported a position, so an arrival at "
+                f"{stop.location_name} cannot be checked against it."
+            )
+        elif far and stale:
+            detail = (
+                f"The vehicle's last reported position is {distance / 1000:.2f} km "
+                f"from {stop.location_name} and {_age_text(age)} old; an arrival "
+                f"needs a position within {allowed / 1000:.1f} km reported no more "
+                f"than {FIX_MAX_AGE_SECONDS // 60} minutes ago."
+            )
+        elif stale:
+            detail = (
+                f"The vehicle last reported its position {_age_text(age)} ago; an "
+                f"arrival needs a position no older than "
+                f"{FIX_MAX_AGE_SECONDS // 60} minutes. The fix cannot say whether "
+                f"the convoy is at {stop.location_name}."
+            )
+        else:
+            detail = (
+                f"The vehicle's last reported position is {distance / 1000:.2f} km "
+                f"from {stop.location_name}; an arrival is only accepted within "
+                f"{allowed / 1000:.1f} km."
+            )
+        raise ValidationError(
+            {
+                "detail": detail + " Record the arrival with an override if the stop has been reached.",
+                "override": (
+                    "Send force=true to record this arrival as unverified; it is "
+                    "noted for the Operations Center."
+                ),
+            }
+        )
+    if distance is None or stale:
+        note = _unverified_note(
+            "Arrival recorded by override", stop, distance, allowed, age
+        )
+    elif far:
+        note = _mismatch_note(
+            "Arrival recorded by override", stop, distance, allowed
+        )
+    else:
+        note = ""
+
     actual = _actual(at)
     kind = (
         MovementEvent.KIND_ARRIVE_DESTINATION
@@ -699,7 +867,8 @@ def arrive_stop(run, stop, actor, *, at=None):
         else MovementEvent.KIND_ARRIVE_STOP
     )
     source = source_for(actor, run)
-    return _event(
+    latitude, longitude, _reported = _reported_position(run, stop)
+    event = _event(
         run,
         kind,
         actor=actor,
@@ -707,9 +876,27 @@ def arrive_stop(run, stop, actor, *, at=None):
         stop=stop,
         actual_at=actual,
         planned_at=stop.planned_arrival or run.etd,
-        latitude=stop.latitude,
-        longitude=stop.longitude,
+        note=note,
+        latitude=latitude,
+        longitude=longitude,
     )
+
+    registration = run.vehicle.registration_number
+    if distance is None or stale:
+        _raise_to_operations_center(
+            run,
+            actor,
+            f"{registration} arrival at {stop.location_name} could not be verified",
+            note,
+        )
+    elif far:
+        _raise_to_operations_center(
+            run,
+            actor,
+            f"{registration} arrival does not match {stop.location_name}",
+            note,
+        )
+    return event
 
 
 @transaction.atomic
@@ -727,8 +914,23 @@ def depart_stop(run, stop, actor, *, at=None):
     ).filter(stop=stop).exists():
         raise ValidationError({"detail": "Record arrival at this stop before departing."})
 
+    # A departure is a claim too: the log keeps the fix beside it, and a claim
+    # that disagrees with the position is raised rather than silently recorded.
+    distance, allowed, age = _stop_fix(run, stop, at=at)
+    far = distance is not None and distance > allowed
+    stale = distance is not None and _is_stale(age)
+    if far:
+        note = _mismatch_note("Departure recorded", stop, distance, allowed)
+    elif stale:
+        note = _unverified_note("Departure recorded", stop, distance, allowed, age)
+    elif distance is None:
+        note = "Departure recorded without a reported position."
+    else:
+        note = ""
+
     actual = _actual(at)
-    return _event(
+    latitude, longitude, _reported = _reported_position(run, stop)
+    event = _event(
         run,
         MovementEvent.KIND_DEPART_STOP,
         actor=actor,
@@ -736,9 +938,21 @@ def depart_stop(run, stop, actor, *, at=None):
         stop=stop,
         actual_at=actual,
         planned_at=stop.planned_departure or stop.planned_arrival or run.etd,
-        latitude=stop.latitude,
-        longitude=stop.longitude,
+        note=note,
+        latitude=latitude,
+        longitude=longitude,
     )
+    if far:
+        _raise_to_operations_center(
+            run,
+            actor,
+            (
+                f"{run.vehicle.registration_number} departure does not match "
+                f"{stop.location_name}"
+            ),
+            note,
+        )
+    return event
 
 
 @transaction.atomic

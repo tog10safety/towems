@@ -3125,7 +3125,9 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                     {"stop": "Choose a stop from this vehicle's itinerary."}
                 )
             if kind == "arrive_stop":
-                tracking_service.arrive_stop(run, stop, request.user, at=at)
+                tracking_service.arrive_stop(
+                    run, stop, request.user, at=at, force=bool(request.data.get("force"))
+                )
             else:
                 tracking_service.depart_stop(run, stop, request.user, at=at)
         elif kind == "complete":

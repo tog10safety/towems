@@ -205,9 +205,10 @@ def test_the_confirmed_origin_departure_resolves_stop_one(
     assert stops[0]["arrived_at"] is None
 
     # Stop 2 can now be reached without a false arrival at the origin.
+    # No fix has been reported, so the arrival is an explicit override.
     arrived = client.post(
         url,
-        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id, "force": True},
         format="json",
     )
     assert arrived.status_code == 200, arrived.content
@@ -234,13 +235,13 @@ def test_stop_arrivals_must_follow_the_itinerary_order(
 
     first = client.post(
         f"/api/missions/{mission.id}/tracking/event/",
-        {"run": run.id, "action": "arrive_stop", "stop": origin.id},
+        {"run": run.id, "action": "arrive_stop", "stop": origin.id, "force": True},
         format="json",
     )
     assert first.status_code == 200, first.content
     second = client.post(
         f"/api/missions/{mission.id}/tracking/event/",
-        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id, "force": True},
         format="json",
     )
     assert second.status_code == 200, second.content
@@ -266,7 +267,14 @@ def test_a_run_completes_only_after_the_final_stop_and_closes_the_mission(
     for stop in (origin, destination):
         assert (
             client.post(
-                url, {"run": run.id, "action": "arrive_stop", "stop": stop.id}, format="json"
+                url,
+                {
+                    "run": run.id,
+                    "action": "arrive_stop",
+                    "stop": stop.id,
+                    "force": True,
+                },
+                format="json",
             ).status_code
             == 200
         )
@@ -709,6 +717,487 @@ def test_an_abort_never_targets_a_stop_the_convoy_has_not_reached(
     assert mission.abort_target_name == planned_final.location_name
 
 
+def test_an_arrival_records_the_position_the_driver_tapped_from(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    tapped_at = (destination.latitude + 0.0008, destination.longitude + 0.0008)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": tapped_at[0],
+                    "longitude": tapped_at[1],
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    )
+    # The tap is logged where the phone was, not where the stop is drawn.
+    assert event.latitude == pytest.approx(tapped_at[0])
+    assert event.longitude == pytest.approx(tapped_at[1])
+    assert event.latitude != pytest.approx(destination.latitude)
+
+
+def test_a_departure_records_the_position_the_driver_tapped_from(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    for latitude, longitude in (
+        (destination.latitude, destination.longitude),
+        (destination.latitude + 0.0006, destination.longitude + 0.0006),
+    ):
+        client.post(
+            f"/api/missions/{mission.id}/tracking/ping/",
+            {
+                "run": run.id,
+                "pings": [
+                    {
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "recorded_at": timeutils.now().isoformat(),
+                    }
+                ],
+            },
+            format="json",
+        )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+    left_from = (destination.latitude + 0.0012, destination.longitude + 0.0012)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": left_from[0],
+                    "longitude": left_from[1],
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(run=run, kind=MovementEvent.KIND_DEPART_STOP)
+    assert event.latitude == pytest.approx(left_from[0])
+    assert event.longitude == pytest.approx(left_from[1])
+    assert event.note == ""
+
+
+def _depart_and_ping_at(as_user, planner, driver, tracked_mission, point):
+    """Start the run and leave the vehicle reporting ``point``."""
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": point[0],
+                    "longitude": point[1],
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+    return mission, run, client, destination
+
+
+def test_an_arrival_without_any_fix_needs_an_override(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+
+    refused = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert refused.status_code == 400
+    body = refused.json()
+    assert "not reported a position" in body["detail"]
+    assert body["errors"]["override"]
+    assert not MovementEvent.objects.filter(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    ).exists()
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {
+            "run": run.id,
+            "action": "arrive_stop",
+            "stop": destination.id,
+            "force": True,
+        },
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    )
+    assert "has not reported a position" in event.note
+    assert "could not be verified" in event.note
+    assert Notification.objects.filter(
+        category="movement", related_id=str(mission.id), title__icontains="verified"
+    ).exists()
+
+
+def test_an_arrival_on_a_fresh_fix_is_verified(as_user, planner, driver, tracked_mission):
+    _mission_obj, _trip, _vehicle, _origin, destination = tracked_mission
+    mission, run, client, destination = _depart_and_ping_at(
+        as_user, planner, driver, tracked_mission, (destination.latitude, destination.longitude)
+    )
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    )
+    assert event.note == ""
+    assert not Notification.objects.filter(
+        category="movement", related_id=str(mission.id), title__icontains="verified"
+    ).exists()
+
+
+def test_the_track_timeline_carries_the_position_of_each_tap(
+    as_user, planner, driver, tracked_mission
+):
+    _mission_obj, _trip, _vehicle, _origin, destination = tracked_mission
+    tapped_at = (destination.latitude + 0.0004, destination.longitude + 0.0004)
+    mission, run, client, destination = _depart_and_ping_at(
+        as_user, planner, driver, tracked_mission, tapped_at
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart_stop", "stop": destination.id},
+        format="json",
+    )
+
+    snapshot = client.get(f"/api/missions/{mission.id}/tracking/").json()
+
+    row = next(
+        stop for stop in snapshot["runs"][0]["stops"] if stop["id"] == destination.id
+    )
+    # Both taps carry the phone's position, and a grid reference to read it by.
+    assert row["arrived_position"]["latitude"] == pytest.approx(tapped_at[0])
+    assert row["arrived_position"]["mgrs"]
+    assert row["departed_position"]["longitude"] == pytest.approx(tapped_at[1])
+    assert row["arrived_position"]["latitude"] != pytest.approx(destination.latitude)
+
+
+def test_an_arrival_on_a_stale_fix_is_unverified_until_overridden(
+    as_user, planner, driver, tracked_mission
+):
+    _mission_obj, _trip, _vehicle, _origin, destination = tracked_mission
+    mission, run, client, destination = _depart_and_ping_at(
+        as_user, planner, driver, tracked_mission, (destination.latitude, destination.longitude)
+    )
+    # The convoy sat on a fix taken 45 minutes ago: near the stop, but too old to
+    # count as evidence of being there.
+    VehicleRun.objects.filter(pk=run.pk).update(
+        last_ping_at=timeutils.now() - dt.timedelta(minutes=45)
+    )
+
+    refused = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert refused.status_code == 400
+    body = refused.json()
+    assert "old" in body["detail"] or "ago" in body["detail"]
+    assert "override" in body.get("errors", body)
+    assert not MovementEvent.objects.filter(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    ).exists()
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {
+            "run": run.id,
+            "action": "arrive_stop",
+            "stop": destination.id,
+            "force": True,
+        },
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    )
+    assert "could not be verified" in event.note
+    assert "45 minutes" in event.note
+    raised = Notification.objects.filter(
+        category="movement", related_id=str(mission.id), title__icontains="verified"
+    )
+    assert raised.exists()
+
+
+def test_a_departure_far_from_the_stop_is_raised_to_the_operations_center(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": destination.latitude,
+                    "longitude": destination.longitude,
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+    # The phone is still at the origin while the driver claims to leave North Ridge.
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": origin.latitude,
+                    "longitude": origin.longitude,
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(run=run, kind=MovementEvent.KIND_DEPART_STOP)
+    assert "does not match" in event.note
+    assert "km from" in event.note
+    # The Operations Center sees the claim and the position disagree.
+    raised = Notification.objects.filter(
+        category="movement", related_id=str(mission.id), title__icontains="departure"
+    )
+    assert raised.exists()
+    assert "does not match" in raised.first().message
+
+
+def test_an_arrival_far_from_the_stop_is_refused(as_user, planner, driver, tracked_mission):
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": 14.6091,
+                    "longitude": 121.0622,
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+
+    refused = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert refused.status_code == 400
+    assert "override" in str(refused.json())
+    assert not MovementEvent.objects.filter(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    ).exists()
+
+
+def test_an_arrival_can_be_recorded_by_override_and_is_noted(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": 14.6091,
+                    "longitude": 121.0622,
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {
+            "run": run.id,
+            "action": "arrive_stop",
+            "stop": destination.id,
+            "force": True,
+        },
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    )
+    assert "override" in event.note.lower()
+    assert "km from" in event.note
+    # The Operations Center is told that the arrival was not verified.
+    assert Notification.objects.filter(
+        category="movement", related_id=str(mission.id)
+    ).exists()
+
+
+def test_an_arrival_next_to_the_stop_needs_no_override(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, _origin, destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    client = as_user(driver)
+    client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "depart"},
+        format="json",
+    )
+    client.post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": destination.latitude + 0.0002,
+                    "longitude": destination.longitude + 0.0002,
+                    "recorded_at": timeutils.now().isoformat(),
+                }
+            ],
+        },
+        format="json",
+    )
+
+    accepted = client.post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": destination.id},
+        format="json",
+    )
+
+    assert accepted.status_code == 200, accepted.content
+    event = MovementEvent.objects.get(
+        run=run, kind=MovementEvent.KIND_ARRIVE_DESTINATION
+    )
+    assert "override" not in event.note.lower()
+
+
 def test_after_an_abort_the_driver_arrives_at_the_pinned_point_and_closes_the_run(
     as_user, planner, driver, tracked_mission
 ):
@@ -733,7 +1222,7 @@ def test_after_an_abort_the_driver_arrives_at_the_pinned_point_and_closes_the_ru
     # pinned point.
     arrived = as_user(driver).post(
         f"/api/missions/{mission.id}/tracking/event/",
-        {"run": run.id, "action": "arrive_stop", "stop": rally.id},
+        {"run": run.id, "action": "arrive_stop", "stop": rally.id, "force": True},
         format="json",
     )
     assert arrived.status_code == 200, arrived.content
