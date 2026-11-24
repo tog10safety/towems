@@ -18,6 +18,7 @@ from apps.ops.models import (
     Mission,
     MovementEvent,
     Notification,
+    TrackingPing,
     TripItinerary,
     Vehicle,
     VehicleRun,
@@ -541,6 +542,63 @@ def test_the_ground_map_shows_running_missions_with_the_drivers_feed(
     assert row["recorded_stops"] == 0
 
 
+def test_the_ground_map_flags_a_vehicle_behind_its_plan(
+    as_user, planner, tracked_mission
+):
+    """The map must show a late convoy, not hide it until the sheet is opened."""
+    mission, _trip, _vehicle, origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    behind = timeutils.now() - dt.timedelta(hours=2)
+    origin.planned_departure = behind
+    origin.save(update_fields=["planned_departure"])
+    run.etd = behind
+    run.save(update_fields=["etd"])
+
+    row = as_user(planner).get("/api/gis/ground-live/").json()["missions"][0]["runs"][0]
+
+    assert row["delay"]["status"] == "late"
+    assert row["delay"]["minutes"] >= 100
+    assert row["delay"]["reason"]
+    assert row["delay"]["stop_sequence"] == 1
+
+
+def test_the_ground_map_reads_the_whole_board_without_a_query_per_vehicle(
+    as_user, planner, driver, unit, tracked_mission, django_assert_max_num_queries
+):
+    """This board is polled every few seconds, so it must not fan out per run."""
+    mission, trip, _vehicle, _origin, _destination = tracked_mission
+    for index in range(5):
+        extra = Vehicle.objects.create(
+            registration_number=f"KM450-77{index:05d}",
+            vehicle_type="KM450",
+            unit=unit,
+        )
+        VehicleTripVehicle.objects.create(trip=trip, vehicle=extra, driver=driver)
+    start(as_user(planner), mission)
+
+    now = timeutils.now()
+    for run in VehicleRun.objects.filter(mission=mission):
+        for index in range(3):
+            TrackingPing.objects.create(
+                run=run,
+                latitude=14.6 + index / 100,
+                longitude=121.0,
+                recorded_at=now - dt.timedelta(seconds=30 * index),
+                source=TrackingPing.SOURCE_MOBILE,
+            )
+    client = as_user(planner)
+
+    # Flat in vehicles: six runs and their pings cost the same as one. A query
+    # per run (itinerary, delay recalculation, trail) would exceed this.
+    with django_assert_max_num_queries(22):
+        body = client.get("/api/gis/ground-live/").json()
+
+    rows = body["missions"][0]["runs"]
+    assert len(rows) == 6
+    assert all(len(row["trail"]) == 3 for row in rows)
+
+
 def test_the_ground_map_drops_a_mission_that_is_no_longer_running(
     as_user, planner, tracked_mission
 ):
@@ -555,6 +613,199 @@ def test_the_ground_map_drops_a_mission_that_is_no_longer_running(
     )
 
     assert as_user(planner).get("/api/gis/ground-live/").json()["missions"] == []
+
+
+def test_the_operations_center_aborts_to_the_last_stop_the_convoy_has_reached(
+    as_user, planner, driver, tracked_mission
+):
+    mission, trip, _vehicle, _origin, destination = tracked_mission
+    planned_final = TripItinerary.objects.create(
+        trip=trip,
+        sequence=3,
+        location_name="Rally Point",
+        latitude=14.82,
+        longitude=121.31,
+        planned_arrival=dt.datetime(2026, 11, 1, 12, 0),
+    )
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    # The convoy has reached the second stop; the planned final stop is ahead.
+    MovementEvent.objects.create(
+        run=run,
+        stop=destination,
+        kind=MovementEvent.KIND_ARRIVE_STOP,
+        actual_at=timeutils.now(),
+        source=MovementEvent.SOURCE_OPERATIONS_CENTER,
+    )
+
+    response = as_user(planner).post(
+        f"/api/missions/{mission.id}/tracking/abort/",
+        {"destination": "last_stop", "reason": "Road blocked by a landslide"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    mission.refresh_from_db()
+    assert mission.aborted_at is not None
+    assert mission.abort_destination == "last_stop"
+    assert mission.abort_target_name == destination.location_name
+    assert mission.abort_target_latitude == pytest.approx(destination.latitude)
+    assert mission.abort_target_longitude == pytest.approx(destination.longitude)
+    # Never further out than the convoy already is: the planned final stop is
+    # still ahead and must not be the pin.
+    assert mission.abort_target_name != planned_final.location_name
+
+    # The drivers are told at once, and the order is part of the movement log.
+    assert Notification.objects.filter(
+        category="mission_abort", recipient=driver, related_id=str(mission.id)
+    ).exists()
+    note = (
+        MovementEvent.objects.filter(
+            run__mission=mission, kind=MovementEvent.KIND_EXCEPTION
+        )
+        .values_list("note", flat=True)
+        .first()
+    )
+    assert "last stop you have reached" in note
+
+    board = as_user(planner).get("/api/gis/ground-live/").json()
+    row = board["missions"][0]
+    assert row["abort"]["destination"] == "last_stop"
+    assert row["abort"]["target"]["name"] == destination.location_name
+
+    snapshot = as_user(driver).get(f"/api/missions/{mission.id}/tracking/").json()
+    assert snapshot["abort"]["reason"] == "Road blocked by a landslide"
+    assert snapshot["mission"]["status"] == "active"
+
+
+def test_an_abort_never_targets_a_stop_the_convoy_has_not_reached(
+    as_user, planner, tracked_mission
+):
+    mission, trip, _vehicle, _origin, _destination = tracked_mission
+    planned_final = TripItinerary.objects.create(
+        trip=trip,
+        sequence=3,
+        location_name="Rally Point",
+        latitude=14.82,
+        longitude=121.31,
+        planned_arrival=dt.datetime(2026, 11, 1, 12, 0),
+    )
+    start(as_user(planner), mission)
+    url = f"/api/missions/{mission.id}/tracking/abort/"
+
+    blocked = as_user(planner).post(
+        url, {"destination": "last_stop", "reason": "Weather"}, format="json"
+    )
+    assert blocked.status_code == 400
+    assert "destination" in str(blocked.json())
+
+    # The plan's own final stop is a separate, explicit choice.
+    allowed = as_user(planner).post(
+        url, {"destination": "final_stop", "reason": "Weather"}, format="json"
+    )
+    assert allowed.status_code == 200, allowed.content
+    mission.refresh_from_db()
+    assert mission.abort_destination == "final_stop"
+    assert mission.abort_target_name == planned_final.location_name
+
+
+def test_after_an_abort_the_driver_arrives_at_the_pinned_point_and_closes_the_run(
+    as_user, planner, driver, tracked_mission
+):
+    mission, trip, _vehicle, _origin, _destination = tracked_mission
+    rally = TripItinerary.objects.create(
+        trip=trip,
+        sequence=3,
+        location_name="Rally Point",
+        latitude=14.82,
+        longitude=121.31,
+        planned_arrival=dt.datetime(2026, 11, 1, 12, 0),
+    )
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    as_user(planner).post(
+        f"/api/missions/{mission.id}/tracking/abort/",
+        {"destination": "final_stop", "reason": "Bridge out"},
+        format="json",
+    )
+
+    # The stops the order skipped no longer stand between the driver and the
+    # pinned point.
+    arrived = as_user(driver).post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "arrive_stop", "stop": rally.id},
+        format="json",
+    )
+    assert arrived.status_code == 200, arrived.content
+
+    closed = as_user(driver).post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "complete", "note": "At the rally point"},
+        format="json",
+    )
+    assert closed.status_code == 200, closed.content
+    run.refresh_from_db()
+    assert run.status == "completed"
+
+
+def test_a_return_to_station_abort_is_closed_by_the_return_itself(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, _origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    as_user(planner).post(
+        f"/api/missions/{mission.id}/tracking/abort/",
+        {"destination": "station", "reason": "Weather closing in"},
+        format="json",
+    )
+
+    closed = as_user(driver).post(
+        f"/api/missions/{mission.id}/tracking/event/",
+        {"run": run.id, "action": "complete", "note": "Back at the station"},
+        format="json",
+    )
+    assert closed.status_code == 200, closed.content
+    run.refresh_from_db()
+    assert run.status == "completed"
+
+
+def test_an_abort_returns_the_convoy_to_station_and_is_the_operations_center_s_alone(
+    as_user, planner, driver, tracked_mission
+):
+    mission, _trip, _vehicle, origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+    url = f"/api/missions/{mission.id}/tracking/abort/"
+
+    denied = as_user(driver).post(
+        url, {"destination": "station", "reason": "Weather"}, format="json"
+    )
+    assert denied.status_code == 403
+    mission.refresh_from_db()
+    assert mission.aborted_at is None
+
+    mission.status = "planned"
+    mission.save(update_fields=["status"])
+    early = as_user(planner).post(
+        url, {"destination": "station", "reason": "Weather"}, format="json"
+    )
+    assert early.status_code == 400
+
+    mission.status = "active"
+    mission.save(update_fields=["status"])
+    ok = as_user(planner).post(
+        url, {"destination": "station", "reason": "Weather"}, format="json"
+    )
+    assert ok.status_code == 200, ok.content
+    mission.refresh_from_db()
+    assert mission.abort_target_name == origin.location_name
+    assert mission.abort_target_latitude == pytest.approx(origin.latitude)
+
+    # Only one abort order per mission.
+    again = as_user(planner).post(
+        url, {"destination": "station", "reason": "Weather"}, format="json"
+    )
+    assert again.status_code == 400
 
 
 def test_the_ground_map_is_empty_for_an_unrelated_unit(

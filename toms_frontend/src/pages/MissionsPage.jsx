@@ -7,6 +7,7 @@ import Icon from "../components/Icon.jsx";
 import PdfViewer from "../components/PdfViewer.jsx";
 import SuperAdminDelete from "../components/SuperAdminDelete.jsx";
 import AirOperationsBoard from "../components/AirOperationsBoard.jsx";
+import AbortMissionDialog from "../components/AbortMissionDialog.jsx";
 import GroundOperationsMap from "../components/GroundOperationsMap.jsx";
 import { useApi } from "../hooks/useApi.js";
 import { formatDateTime } from "../utils/format.js";
@@ -114,6 +115,10 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
   const [endError, setEndError] = useState("");
   const [dispatching, setDispatching] = useState(null);
   const [dispatchError, setDispatchError] = useState("");
+  // The abort order: the Operations Center ends a mission in progress and pins
+  // where its vehicles finish - back at the station or on the plan's last stop.
+  // The dialog itself is shared with the live map.
+  const [abortRow, setAbortRow] = useState(null);
   // { kind: "mrm" | "order", row } while a PDF preview is open.
   const [preview, setPreview] = useState(null);
 
@@ -483,6 +488,7 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
                         onClick={(event) => event.stopPropagation()}
                       >
                         <StatusBadge status={row.status} />
+                        {row.abort && <Badge tone="danger">ABORTED</Badge>}
                         {order.status === "approved" && (
                           <IconButton
                             name="eye"
@@ -552,6 +558,16 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
                             Map
                           </a>
                         )}
+                        {category === "ground" && canPlan && row.status === "active" && !row.abort && (
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            title={`Abort mission ${row.mission_number} and tell the drivers where to finish`}
+                            onClick={() => setAbortRow(row)}
+                          >
+                            Abort
+                          </Button>
+                        )}
                         {canPlan && row.closing?.available && (
                           <Button
                             variant="warning"
@@ -586,6 +602,17 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
         </Card>
         )}
         </>
+      )}
+
+      {abortRow && (
+        <AbortMissionDialog
+          mission={abortRow}
+          onClose={() => setAbortRow(null)}
+          onDone={() => {
+            setAbortRow(null);
+            reload();
+          }}
+        />
       )}
 
       {preview && (

@@ -16,6 +16,7 @@ import {
   resolveBasemap,
   writeStored,
 } from "../map/config.js";
+import { abortPhrase, abortShort } from "../utils/abort.js";
 import { formatDateTime } from "../utils/format.js";
 
 /**
@@ -125,9 +126,21 @@ function itineraryLabel(stops) {
     .join(" - ");
 }
 
-function stopPin(stop, isNext, isFinal) {
-  const tone =
-    stop.status === "departed" || (isFinal && stop.status === "arrived")
+/** Where an abort order ends this convoy: the station or the plan's last stop. */
+function abortPin() {
+  return divIcon({
+    className: "driver-abort-pin",
+    html: "<span></span>",
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+    popupAnchor: [0, -14],
+  });
+}
+
+function stopPin(stop, isNext, isFinal, isSuperseded = false) {
+  const tone = isSuperseded
+    ? "superseded"
+    : stop.status === "departed" || (isFinal && stop.status === "arrived")
       ? "done"
       : stop.status === "arrived"
         ? "arrived"
@@ -270,7 +283,7 @@ function LocateGlyph() {
 }
 
 /** The itinerary as recorded times, never as inferred ones. */
-function StopTimeline({ stops }) {
+function StopTimeline({ stops, supersededIds }) {
   if (!stops.length) {
     return <p className="hint">No stop has been planned for this vehicle.</p>;
   }
@@ -278,24 +291,28 @@ function StopTimeline({ stops }) {
     <ol className="stop-timeline driver-timeline">
       {stops.map((stop, index) => {
         const isFinal = index === stops.length - 1;
-        const tone =
-          stop.status === "departed"
+        const skipped = Boolean(supersededIds?.has(stop.id));
+        const tone = skipped
+          ? "stop-superseded"
+          : stop.status === "departed"
             ? "stop-departed"
             : stop.status === "arrived"
               ? isFinal
                 ? "stop-arrived stop-completed"
                 : "stop-arrived"
               : "";
-        const when =
-          stop.status === "departed"
+        const when = skipped
+          ? "Skipped by the abort order"
+          : stop.status === "departed"
             ? `Departed ${formatDateTime(stop.departed_at)}`
             : stop.status === "arrived"
               ? `Arrived ${formatDateTime(stop.arrived_at)}`
               : `Planned ${formatDateTime(
                   stop.planned_arrival || stop.planned_departure
                 )}`;
-        const state =
-          stop.status === "departed"
+        const state = skipped
+          ? "Skipped"
+          : stop.status === "departed"
             ? "Done"
             : stop.status === "arrived"
               ? isFinal
@@ -310,7 +327,9 @@ function StopTimeline({ stops }) {
               </strong>
               <p className="hint">{when}</p>
             </div>
-            <span className={`driver-stop-state is-${stop.status}`}>{state}</span>
+            <span className={`driver-stop-state is-${skipped ? "skipped" : stop.status}`}>
+              {state}
+            </span>
           </li>
         );
       })}
@@ -418,6 +437,12 @@ export default function DriverTrackingPage() {
     }
   });
   if (selfPoint) mapPoints.push(selfPoint);
+  if (
+    data?.abort?.target?.latitude != null &&
+    data.abort.target.longitude != null
+  ) {
+    mapPoints.push([data.abort.target.latitude, data.abort.target.longitude]);
+  }
 
   // Restore any breadcrumbs that were never sent before the page was closed.
   useEffect(() => {
@@ -691,6 +716,35 @@ export default function DriverTrackingPage() {
   }
 
   const mission = data.mission;
+  const abort = data.abort;
+  // After an abort the pinned point is the only stop that still matters. This
+  // run's own copy of it is matched by the name and coordinates the order set,
+  // because each vehicle keeps its own itinerary.
+  const abortStop = abort
+    ? activeStops.find((stop) => {
+        if (stop.location_name !== abort.target?.name) return false;
+        if (abort.target?.latitude == null || stop.latitude == null) return true;
+        return (
+          Math.abs(stop.latitude - abort.target.latitude) < 1e-6 &&
+          Math.abs(stop.longitude - abort.target.longitude) < 1e-6
+        );
+      }) || null
+    : null;
+  // The distance that matters is the one to wherever this screen now points.
+  const distanceToAbort =
+    selfPoint && abort?.target?.latitude != null
+      ? haversineKm(selfPoint, [abort.target.latitude, abort.target.longitude])
+      : null;
+  const distanceToFocus = abort ? distanceToAbort : distanceToNext;
+  // Everything the order made irrelevant: still pending, and not the point the
+  // convoy is now heading for.
+  const supersededIds = abort
+    ? new Set(
+        activeStops
+          .filter((stop) => stop.status === "pending" && stop.id !== abortStop?.id)
+          .map((stop) => stop.id)
+      )
+    : new Set();
   // The driver reads their own itinerary first; the destination address is the
   // Operations Center's view of the mission, not a heading for the wheel.
   const itineraryRun = activeRun || myRuns[0] || actionable[0] || runs[0] || null;
@@ -723,7 +777,25 @@ export default function DriverTrackingPage() {
 
   let primaryAction = null;
   if (editable && activeRun) {
-    if (awaitingDeparture) {
+    if (abort) {
+      // The abort replaces what was left of the plan: arrive at the pinned
+      // point, then close the run. A return to station is closed by the return
+      // itself, so it goes straight to completion.
+      primaryAction = awaitingDeparture
+        ? {
+            label: "Confirm departure",
+            onClick: () => record(activeRun, "depart"),
+          }
+        : abortStop && abortStop.status === "pending"
+          ? {
+              label: `Arrived at ${abortStop.location_name}`,
+              onClick: () => record(activeRun, "arrive_stop", abortStop),
+            }
+          : {
+              label: "Complete this run",
+              onClick: () => record(activeRun, "complete"),
+            };
+    } else if (awaitingDeparture) {
       primaryAction = {
         label: "Confirm departure",
         onClick: () => record(activeRun, "depart"),
@@ -792,6 +864,21 @@ export default function DriverTrackingPage() {
         </div>
       )}
 
+      {abort && (
+        <div className="alert alert-danger" role="alert">
+          <strong>
+            MISSION ABORTED — {abortPhrase(abort.destination)}
+            {abort.target?.name ? `: ${abort.target.name}` : ""}
+          </strong>
+          <div>{abort.reason}</div>
+          <div className="hint">
+            {abort.destination === "station"
+              ? "Make your way back to the station, then complete the run when you arrive."
+              : "Make your way to this point, record your arrival there, then complete the run. The stops the order skipped are no longer part of the trip."}
+          </div>
+        </div>
+      )}
+
       {runs.length === 0 && (
         <div className="card">
           <div className="card-body">
@@ -854,14 +941,42 @@ export default function DriverTrackingPage() {
                 />
               )}
 
+              {abort?.target?.latitude != null && abort?.target?.longitude != null && (
+                <Marker
+                  position={[abort.target.latitude, abort.target.longitude]}
+                  icon={abortPin()}
+                  zIndexOffset={400000}
+                >
+                  <Tooltip direction="top" offset={[0, -14]} permanent>
+                    {abortShort(abort.destination)}
+                  </Tooltip>
+                  <Popup>
+                    <strong>{abort.target.name}</strong>
+                    <br />
+                    {abort.reason}
+                  </Popup>
+                </Marker>
+              )}
+
               {activeStops.map((stop, index) => {
                 if (stop.latitude == null || stop.longitude == null) return null;
-                const isNext = nextStop?.id === stop.id;
+                // The abort pin stands for the point the convoy is heading for,
+                // so its planned-stop pin would only sit underneath it.
+                if (abortStop?.id === stop.id) return null;
+                const isNext = abort
+                  ? false
+                  : nextStop?.id === stop.id;
+                const skipped = supersededIds.has(stop.id);
                 return (
                   <Marker
                     key={`stop-${stop.id}`}
                     position={[stop.latitude, stop.longitude]}
-                    icon={stopPin(stop, isNext, index === activeStops.length - 1)}
+                    icon={stopPin(
+                      stop,
+                      isNext,
+                      index === activeStops.length - 1,
+                      skipped
+                    )}
                     zIndexOffset={isNext ? 600000 : 400000}
                   >
                     <Tooltip direction="top" offset={[0, -14]}>
@@ -872,11 +987,13 @@ export default function DriverTrackingPage() {
                         {stop.sequence}. {stop.location_name}
                       </strong>
                       <br />
-                      {stop.status === "departed"
-                        ? "Departed"
-                        : stop.status === "arrived"
-                          ? "Arrived"
-                          : "Not reached yet"}
+                      {supersededIds.has(stop.id)
+                        ? "Skipped by the abort order"
+                        : stop.status === "departed"
+                          ? "Departed"
+                          : stop.status === "arrived"
+                            ? "Arrived"
+                            : "Not reached yet"}
                       <br />
                       Planned {formatDateTime(stop.planned_arrival || stop.planned_departure)}
                     </Popup>
@@ -1025,10 +1142,15 @@ export default function DriverTrackingPage() {
                     {activeRun.is_lead ? " · Lead" : ""}
                   </strong>
                   <span>
-                    {recordedStops}/{activeStops.length} stops ·{" "}
-                    {nextStop
-                      ? `Next: ${nextStop.location_name}`
-                      : "All stops recorded"}
+                    {abort
+                      ? `${recordedStops} recorded · ${supersededIds.size} skipped`
+                      : `${recordedStops}/${activeStops.length} stops`}
+                    {" · "}
+                    {abort
+                      ? `Abort: ${abort.target?.name || "pinned point"}`
+                      : nextStop
+                        ? `Next: ${nextStop.location_name}`
+                        : "All stops recorded"}
                   </span>
                 </span>
                 <span className="driver-sheet-toggle">
@@ -1080,17 +1202,25 @@ export default function DriverTrackingPage() {
 
                   <section className="driver-next">
                     <span className="driver-next-kicker">
-                      {nextStop
-                        ? nextIndex === 0
-                          ? "Departure point"
-                          : `Stop ${nextStop.sequence} of ${activeStops.length}`
-                        : "Itinerary"}
+                      {abort
+                        ? "Abort end point"
+                        : nextStop
+                          ? nextIndex === 0
+                            ? "Departure point"
+                            : `Stop ${nextStop.sequence} of ${activeStops.length}`
+                          : "Itinerary"}
                     </span>
                     <h3>
-                      {nextStop ? nextStop.location_name : "Every stop is recorded"}
+                      {abort
+                        ? abort.target?.name || "Pinned point"
+                        : nextStop
+                          ? nextStop.location_name
+                          : "Every stop is recorded"}
                     </h3>
                     <p className="driver-next-meta">
-                      {nextStop ? (
+                      {abort ? (
+                        <span>{abortPhrase(abort.destination)}</span>
+                      ) : nextStop ? (
                         <span>
                           Planned{" "}
                           {formatDateTime(
@@ -1098,8 +1228,8 @@ export default function DriverTrackingPage() {
                           )}
                         </span>
                       ) : null}
-                      {distanceToNext != null && (
-                        <span>{distanceToNext.toFixed(1)} km away</span>
+                      {distanceToFocus != null && (
+                        <span>{distanceToFocus.toFixed(1)} km away</span>
                       )}
                       {awaitingDeparture && activeRun.etd ? (
                         <span>ETD {formatDateTime(activeRun.etd)}</span>
@@ -1201,7 +1331,7 @@ export default function DriverTrackingPage() {
 
                   <section>
                     <h3 className="driver-section-title">Stops</h3>
-                    <StopTimeline stops={activeStops} />
+                    <StopTimeline stops={activeStops} supersededIds={supersededIds} />
                   </section>
 
                   <div className="driver-map-style">

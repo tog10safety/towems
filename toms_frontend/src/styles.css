@@ -3686,6 +3686,76 @@ dl.details {
   margin-bottom: 16px;
 }
 
+/* Full screen is the live map's own mode: the card leaves the page layout and
+   fills the viewport, with the map taking every pixel the header leaves. */
+.map-card.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  margin: 0;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+}
+
+.map-card.is-fullscreen .card-head {
+  flex: none;
+}
+
+.map-card.is-fullscreen .card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-card.is-fullscreen .map-layout {
+  flex: 1;
+  min-height: 0;
+}
+
+.map-card.is-fullscreen .map-canvas {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+body.map-fullscreen-open {
+  overflow: hidden;
+}
+
+/* Map style and the full-screen toggle share one floating panel, inside the
+   map frame rather than above it. */
+.ground-map-overlay {
+  width: 220px;
+}
+
+.ground-map-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ground-map-expand {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ground-map-expand:hover {
+  background: var(--bg-elevated);
+  filter: brightness(1.08);
+}
+
 .map-filters {
   display: grid;
   gap: 9px;
@@ -3938,6 +4008,14 @@ dl.details {
   opacity: 0.75;
 }
 
+/* Declared last so lateness wins over the live/lead/stale colours. */
+.ground-vehicle-pin.is-late {
+  background: #f85149;
+  box-shadow:
+    0 0 0 3px rgba(248, 81, 73, 0.35),
+    0 3px 10px rgba(15, 23, 42, 0.35);
+}
+
 .ground-mission-pin {
   display: grid;
   place-items: center;
@@ -3952,6 +4030,47 @@ dl.details {
 
 .ground-mission-pin.is-idle {
   background: rgba(139, 148, 158, 0.9);
+}
+
+/* An aborted mission outranks the idle/live colour: the picture is about to
+   end at the pinned point, and the Operations Center must see which one. */
+.ground-mission-pin.is-aborted {
+  background: rgba(248, 81, 73, 0.95);
+  box-shadow:
+    0 0 0 4px rgba(248, 81, 73, 0.3),
+    0 3px 10px rgba(15, 23, 42, 0.35);
+}
+
+.ground-abort-pin {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  background: #f85149;
+  box-shadow: 0 0 0 4px rgba(248, 81, 73, 0.3);
+}
+
+.ground-abort-pin span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.driver-abort-pin {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  background: #e5484d;
+  box-shadow: 0 0 0 6px rgba(229, 72, 77, 0.35);
+}
+
+.driver-abort-pin span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
 }
 
 /* Mission tracking: one large map in its own tab, with a narrow side panel. */
@@ -4696,6 +4815,31 @@ dl.details {
 
 .driver-pin.is-done span {
   background: #16a34a;
+}
+
+/* A stop the abort order skipped: still on the plan, no longer a task. */
+.driver-pin.is-superseded span {
+  background: transparent;
+  border: 2px dashed #94a3b8;
+  color: #94a3b8;
+  box-shadow: none;
+}
+
+.stop-row.stop-superseded {
+  border-left-color: #94a3b8;
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.stop-row.stop-superseded strong {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.7);
+}
+
+.driver-stop-state.is-skipped {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: transparent;
+  color: var(--text-muted);
 }
 
 .driver-self {

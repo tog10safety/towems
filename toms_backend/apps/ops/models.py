@@ -76,6 +76,41 @@ class Mission(TimestampedModel):
     is_held = models.BooleanField(default=False)
     held_at = models.DateTimeField(null=True, blank=True)
 
+    # -- abort order ---------------------------------------------------------
+    #: A mission in progress may be aborted by the Operations Center, which also
+    #: pins where it ends: back at the station or on the plan's last stop. The
+    #: order is kept on the mission so the board and the drivers' screens read
+    #: the same instruction without re-deriving it from a notification.
+    ABORT_STATION = "station"
+    #: The last stop any vehicle has actually recorded reaching - never further
+    #: out than where the convoy already is.
+    ABORT_LAST_STOP = "last_stop"
+    #: The plan's own final stop, which may still be ahead of the convoy.
+    ABORT_FINAL_STOP = "final_stop"
+    ABORT_DESTINATION_CHOICES = [
+        (ABORT_STATION, "Return to station"),
+        (ABORT_LAST_STOP, "Last stop reached"),
+        (ABORT_FINAL_STOP, "Planned final stop"),
+    ]
+
+    aborted_at = models.DateTimeField(null=True, blank=True)
+    abort_reason = models.TextField(blank=True, default="")
+    abort_destination = models.CharField(
+        max_length=20, choices=ABORT_DESTINATION_CHOICES, blank=True, default=""
+    )
+    abort_target_name = models.CharField(max_length=255, blank=True, default="")
+    abort_target_latitude = models.FloatField(null=True, blank=True)
+    abort_target_longitude = models.FloatField(null=True, blank=True)
+    aborted_by = models.ForeignKey(
+        "accounts.User",
+        db_column="aborted_by",
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="aborted_missions",
+    )
+
     # -- mission sequencing ------------------------------------------------
     #: An earlier mission this one waits for. PROTECT keeps a completed or
     #: planned predecessor from being deleted out from under a dependent.

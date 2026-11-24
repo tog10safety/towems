@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { divIcon } from "leaflet";
 import { MapContainer, Marker, Polyline, Popup, Tooltip, useMap } from "react-leaflet";
+import { useAuth } from "../auth/AuthContext.jsx";
 import { useApi } from "../hooks/useApi.js";
 import { useTheme } from "../theme/ThemeContext.jsx";
-import { Badge, ErrorBanner, Loading } from "./ui.jsx";
+import AbortMissionDialog from "./AbortMissionDialog.jsx";
+import { Badge, Button, ErrorBanner, Loading } from "./ui.jsx";
 import BasemapControl from "./map/BasemapControl.jsx";
 import MapBasemapLayer from "./map/MapBasemapLayer.jsx";
 import {
@@ -13,6 +15,7 @@ import {
   resolveBasemap,
   writeStored,
 } from "../map/config.js";
+import { abortPhrase } from "../utils/abort.js";
 import { formatDateTime } from "../utils/format.js";
 
 /**
@@ -31,9 +34,14 @@ const REFRESH_MS = 4000;
 const DEFAULT_CENTER = [12.8797, 121.774];
 
 function vehicleIcon(run) {
-  const tone = run.is_live ? (run.is_lead ? "is-lead" : "is-live") : "is-stale";
+  // Behind plan outranks everything else the dot could say: the Operations
+  // Center has to spot a late convoy without opening a popup.
+  const classes = ["ground-vehicle-pin"];
+  if (run.is_live) classes.push(run.is_lead ? "is-lead" : "is-live");
+  else classes.push("is-stale");
+  if (run.delay?.status === "late") classes.push("is-late");
   return divIcon({
-    className: `ground-vehicle-pin ${tone}`,
+    className: classes.join(" "),
     html: "<span></span>",
     iconSize: [26, 26],
     iconAnchor: [13, 13],
@@ -45,13 +53,62 @@ function missionIcon(mission) {
   const reporting = (mission.runs || []).filter(
     (run) => run.latitude != null && run.longitude != null
   ).length;
+  const classes = ["ground-mission-pin"];
+  if (!reporting) classes.push("is-idle");
+  if (mission.abort) classes.push("is-aborted");
   return divIcon({
-    className: `ground-mission-pin${reporting ? "" : " is-idle"}`,
+    className: classes.join(" "),
     html: `<span>${reporting || "–"}</span>`,
     iconSize: [28, 28],
     iconAnchor: [14, 14],
     popupAnchor: [0, -15],
   });
+}
+
+/** The point an abort order sends the vehicles to. */
+function abortTargetIcon() {
+  return divIcon({
+    className: "ground-abort-pin",
+    html: "<span></span>",
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -12],
+  });
+}
+
+/** Corners out for full screen, corners in to leave it. */
+function ExpandGlyph({ expanded }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {expanded ? (
+        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+      ) : (
+        <path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />
+      )}
+    </svg>
+  );
+}
+
+/** Leaflet caches its own size: a full-screen switch has to re-measure it. */
+function MapResize({ expanded }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => map.invalidateSize());
+    return () => window.cancelAnimationFrame(frame);
+  }, [expanded, map]);
+
+  return null;
 }
 
 /** Fit the picture once per set of missions, not on every four-second poll. */
@@ -76,6 +133,11 @@ function minutesAgo(seconds) {
 }
 
 export default function GroundOperationsMap() {
+  const { permissions } = useAuth();
+  // The abort order is the Operations Center's own; the register offers it on
+  // the same capability, and the server checks it again.
+  const canPlan = Boolean(permissions?.can_plan_missions);
+  const [abortMission, setAbortMission] = useState(null);
   const { resolvedTheme } = useTheme();
   const config = useApi("/map/config/");
   const { data, loading, error, reload } = useApi("/gis/ground-live/");
@@ -83,6 +145,7 @@ export default function GroundOperationsMap() {
   const [basemapFailure, setBasemapFailure] = useState("");
   const [updatedAt, setUpdatedAt] = useState(null);
   const [now, setNow] = useState(() => Date.now());
+  const [fullScreen, setFullScreen] = useState(false);
 
   const basemap = useMemo(
     () => resolveBasemap(config.data, basemapId, resolvedTheme),
@@ -106,6 +169,21 @@ export default function GroundOperationsMap() {
     if (data) setUpdatedAt(Date.now());
   }, [data]);
 
+  // Full screen is the map's own mode: Escape leaves it, and the page behind it
+  // does not scroll while it is open.
+  useEffect(() => {
+    if (!fullScreen) return undefined;
+    document.body.classList.add("map-fullscreen-open");
+    function onKey(event) {
+      if (event.key === "Escape") setFullScreen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.body.classList.remove("map-fullscreen-open");
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [fullScreen]);
+
   // A moving "seconds ago" is how an operator tells a live feed from a frozen
   // one at a glance.
   useEffect(() => {
@@ -122,11 +200,16 @@ export default function GroundOperationsMap() {
   const reporting = runs.filter((run) => run.latitude != null && run.longitude != null);
   const liveCount = reporting.filter((run) => run.is_live).length;
   const quietCount = reporting.length - liveCount;
+  const lateCount = runs.filter((run) => run.delay?.status === "late").length;
+  const abortedCount = missions.filter((mission) => mission.abort).length;
 
   const points = [];
   missions.forEach((mission) => {
     if (mission.latitude != null && mission.longitude != null) {
       points.push([mission.latitude, mission.longitude]);
+    }
+    if (mission.abort?.target?.latitude != null && mission.abort.target.longitude != null) {
+      points.push([mission.abort.target.latitude, mission.abort.target.longitude]);
     }
   });
   reporting.forEach((run) => points.push([run.latitude, run.longitude]));
@@ -143,7 +226,7 @@ export default function GroundOperationsMap() {
   }
 
   return (
-    <section className="card map-card">
+    <section className={`card map-card${fullScreen ? " is-fullscreen" : ""}`}>
       <header className="card-head">
         <div>
           <h2>Live ground movement</h2>
@@ -159,6 +242,16 @@ export default function GroundOperationsMap() {
           </Badge>
           <Badge tone={liveCount ? "success" : "muted"}>{liveCount} live</Badge>
           {quietCount > 0 && <Badge tone="warning">{quietCount} not reporting</Badge>}
+          {lateCount > 0 && (
+            <Badge tone="danger">
+              {lateCount} behind plan
+            </Badge>
+          )}
+          {abortedCount > 0 && (
+            <Badge tone="danger">
+              {abortedCount} aborted
+            </Badge>
+          )}
         </div>
       </header>
 
@@ -171,21 +264,30 @@ export default function GroundOperationsMap() {
           </div>
         )}
 
-        <div className="map-filter-row" style={{ marginBottom: 10 }}>
-          <label className="map-filter-field">
-            <span>Map style</span>
-            <BasemapControl
-              config={config.data}
-              value={basemap?.id}
-              onChange={chooseBasemap}
-              compact
-              showLabel={false}
-            />
-          </label>
-        </div>
-
         <div className="map-layout">
           <div className="map-canvas map-canvas-dashboard">
+            <div className="map-style-overlay ground-map-overlay">
+              <div className="ground-map-overlay-head">
+                <span className="hint">Map style</span>
+                <button
+                  type="button"
+                  className="ground-map-expand"
+                  onClick={() => setFullScreen((value) => !value)}
+                  aria-pressed={fullScreen}
+                  aria-label={fullScreen ? "Leave full screen" : "Show the map full screen"}
+                  title={fullScreen ? "Leave full screen (Esc)" : "Full screen"}
+                >
+                  <ExpandGlyph expanded={fullScreen} />
+                </button>
+              </div>
+              <BasemapControl
+                config={config.data}
+                value={basemap?.id}
+                onChange={chooseBasemap}
+                compact
+                showLabel={false}
+              />
+            </div>
             {loading && !data ? (
               <Loading label="Loading ground movement…" />
             ) : (
@@ -198,6 +300,7 @@ export default function GroundOperationsMap() {
                   basemap={basemap}
                   onError={() => setBasemapFailure(basemap?.id || "")}
                 />
+                <MapResize expanded={fullScreen} />
                 <GroundFit points={points} signature={signature} />
 
                 {runs.map((run) =>
@@ -242,10 +345,63 @@ export default function GroundOperationsMap() {
                         <br />
                         {mission.location_name || ""}
                         <br />
+                        {mission.abort ? (
+                          <>
+                            <strong>
+                              ABORTED — {abortPhrase(mission.abort.destination)}
+                              {mission.abort.target?.name
+                                ? `: ${mission.abort.target.name}`
+                                : ""}
+                            </strong>
+                            <br />
+                            {mission.abort.reason}
+                            <br />
+                          </>
+                        ) : null}
                         {(mission.runs || []).length} vehicle
                         {(mission.runs || []).length === 1 ? "" : "s"}
                         <br />
                         <Link to={`/missions/${mission.id}/track`}>Open the convoy map</Link>
+                        {canPlan && !mission.abort && (
+                          <div style={{ marginTop: 6 }}>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() => setAbortMission(mission)}
+                            >
+                              Abort mission
+                            </Button>
+                          </div>
+                        )}
+                      </Popup>
+                    </Marker>
+                  ) : null
+                )}
+
+                {missions.map((mission) =>
+                  mission.abort?.target?.latitude != null &&
+                  mission.abort.target.longitude != null ? (
+                    <Marker
+                      key={`abort-${mission.id}`}
+                      position={[
+                        mission.abort.target.latitude,
+                        mission.abort.target.longitude,
+                      ]}
+                      icon={abortTargetIcon()}
+                      zIndexOffset={400000}
+                    >
+                      <Tooltip direction="top" offset={[0, -12]} permanent>
+                        {mission.mission_number} ends here
+                      </Tooltip>
+                      <Popup>
+                        <strong>
+                          {abortPhrase(mission.abort.destination)}:{" "}
+                          {mission.abort.target.name}
+                        </strong>
+                        <br />
+                        {mission.abort.reason}
+                        <br />
+                        Ordered {formatDateTime(mission.abort.at)}
                       </Popup>
                     </Marker>
                   ) : null
@@ -260,6 +416,7 @@ export default function GroundOperationsMap() {
                   >
                     <Tooltip direction="top" offset={[0, -12]} permanent>
                       {run.registration_number}
+                      {run.delay?.status === "late" ? " · late" : ""}
                     </Tooltip>
                     <Popup>
                       <strong>
@@ -276,6 +433,14 @@ export default function GroundOperationsMap() {
                         <>
                           <br />
                           Next: {run.next_stop.sequence}. {run.next_stop.location_name}
+                        </>
+                      ) : null}
+                      {run.delay?.status === "late" ? (
+                        <>
+                          <br />
+                          <strong>{run.delay.minutes} min behind plan</strong>
+                          <br />
+                          {run.delay.reason}
                         </>
                       ) : null}
                       <br />
@@ -295,6 +460,17 @@ export default function GroundOperationsMap() {
           </p>
         )}
       </div>
+
+      {abortMission && (
+        <AbortMissionDialog
+          mission={abortMission}
+          onClose={() => setAbortMission(null)}
+          onDone={() => {
+            setAbortMission(null);
+            reload();
+          }}
+        />
+      )}
     </section>
   );
 }

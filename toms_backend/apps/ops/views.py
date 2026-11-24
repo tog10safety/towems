@@ -1176,6 +1176,7 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             "tracking_event",
             "tracking_ping",
             "tracking_emergency",
+            "tracking_abort",
             "tracking_complete",
             "tracking_log",
             # The destination Operations Center reads the handoff and decides
@@ -3208,6 +3209,39 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             request=request,
         )
         return Response({"run": run.id, "notified": len(rows)})
+
+    @action(detail=True, methods=["post"], url_path="tracking/abort")
+    def tracking_abort(self, request, pk=None):
+        """Abort a mission in progress and pin where its vehicles end.
+
+        Only the Operations Center orders an abort, and only while the mission
+        is running. The drivers are notified at once with the pinned point; the
+        mission keeps being watched until the Operations Center closes it.
+        """
+        from apps.ops import tracking as tracking_service
+
+        mission = self.get_object()
+        if not tracking_service.can_manage(request.user, mission):
+            raise PermissionDenied("Only the Operations Center may abort a mission.")
+        rows = tracking_service.abort_mission(
+            mission,
+            request.user,
+            destination=request.data.get("destination"),
+            reason=request.data.get("reason", ""),
+        )
+        log_action(
+            actor=request.user,
+            action="tracking_abort",
+            entity_type="mission",
+            entity_id=mission.pk,
+            after={
+                "destination": mission.abort_destination,
+                "target": mission.abort_target_name,
+                "notified": len(rows),
+            },
+            request=request,
+        )
+        return Response(tracking_service.snapshot(mission, request.user))
 
     @action(detail=True, methods=["post"], url_path="tracking/complete")
     def tracking_complete(self, request, pk=None):

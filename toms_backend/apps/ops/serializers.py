@@ -1570,6 +1570,7 @@ class MissionSerializer(serializers.ModelSerializer):
     execution = serializers.SerializerMethodField()
     mission_order = serializers.SerializerMethodField()
     closing = serializers.SerializerMethodField()
+    abort = serializers.SerializerMethodField()
     vehicles = serializers.SerializerMethodField()
     dependency = serializers.SerializerMethodField()
     is_airborne = serializers.SerializerMethodField()
@@ -1628,6 +1629,7 @@ class MissionSerializer(serializers.ModelSerializer):
             "execution",
             "mission_order",
             "closing",
+            "abort",
             "vehicles",
             "created_at",
             "updated_at",
@@ -1745,6 +1747,12 @@ class MissionSerializer(serializers.ModelSerializer):
 
         request = self.context.get("request")
         return mission_order_workflow.state(obj, getattr(request, "user", None))
+
+    def get_abort(self, obj):
+        """The abort order on this mission, or None while it is still running."""
+        from apps.ops import tracking
+
+        return tracking.abort_payload(obj)
 
     def get_closing(self, obj) -> dict:
         """Whether the Operations Center may end this mission now, and why.

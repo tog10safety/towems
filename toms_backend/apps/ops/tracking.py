@@ -12,6 +12,8 @@ from __future__ import annotations
 import datetime as dt
 
 from django.db import transaction
+from django.db.models import F, Subquery, Window
+from django.db.models.functions import RowNumber
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -51,7 +53,7 @@ def can_manage(user, mission) -> bool:
     return bool(user and mission and can(user, roles.CAP_MANAGE_MISSIONS, mission.unit_id))
 
 
-def can_monitor(user, mission) -> bool:
+def can_monitor(user, mission, *, capabilities=None, handoff_ids=None) -> bool:
     """Read the whole board: explicit monitoring roles, a manager, or the
     destination unit's Operations Center that received the handoff.
 
@@ -59,13 +61,23 @@ def can_monitor(user, mission) -> bool:
     posts it forwards the details to may read the mission, but not its live
     board; recording departures, stops and corrections stays with the owning
     unit, its drivers and the convoy lead.
+
+    A caller drawing a whole board may pass ``capabilities`` for the mission's
+    unit and the set of ``handoff_ids`` it has already loaded, so a poll costs
+    one permission read per unit instead of one per mission.
     """
     if not user or not mission:
         return False
-    if can_manage(user, mission) or can(
-        user, roles.CAP_MONITOR_VEHICLE_TRACKING, mission.unit_id
-    ):
+    caps = (
+        capabilities
+        if capabilities is not None
+        else roles.capabilities_for(user, mission.unit_id)
+    )
+    if roles.CAP_MANAGE_MISSIONS in caps or roles.CAP_MONITOR_VEHICLE_TRACKING in caps:
         return True
+
+    if handoff_ids is not None:
+        return str(mission.id) in handoff_ids
 
     from apps.ops import aor_handoff
 
@@ -75,6 +87,192 @@ def can_monitor(user, mission) -> bool:
         related_type="mission",
         related_id=str(mission.id),
     ).exists()
+
+
+# ---------------------------------------------------------------------------
+# Abort order
+# ---------------------------------------------------------------------------
+
+ABORT_CATEGORY = "mission_abort"
+
+
+def abort_payload(mission) -> dict | None:
+    """The abort order on a mission, or None while it is still running."""
+    if getattr(mission, "aborted_at", None) is None:
+        return None
+    return {
+        "at": mission.aborted_at,
+        "reason": mission.abort_reason,
+        "destination": mission.abort_destination,
+        "target": {
+            "name": mission.abort_target_name,
+            "latitude": mission.abort_target_latitude,
+            "longitude": mission.abort_target_longitude,
+        },
+    }
+
+
+def _abort_runs(mission):
+    return list(
+        VehicleRun.objects.filter(mission=mission)
+        .exclude(status=VehicleRun.STATUS_CANCELLED)
+        .select_related("vehicle", "driver", "trip")
+        .prefetch_related("events", "trip__itinerary")
+        .order_by("-is_lead", "vehicle__registration_number", "id")
+    )
+
+
+#: How each end point is worded in the order sent to the drivers.
+ABORT_INSTRUCTIONS = {
+    Mission.ABORT_STATION: "return to station",
+    Mission.ABORT_LAST_STOP: "proceed to the last stop you have reached",
+    Mission.ABORT_FINAL_STOP: "continue to the planned final stop",
+}
+
+
+def _abort_target(mission, destination, runs):
+    """The pin an abort ends on.
+
+    ``last_stop`` is the stop the vehicles have actually recorded reaching, so
+    an abort never sends a convoy further out; the plan's final stop is a
+    separate, explicitly labelled choice.
+    """
+    stops = list(runs[0].trip.itinerary.all())
+    if not stops:
+        raise ValidationError(
+            {"detail": "This mission's itinerary has no stops to end on."}
+        )
+
+    if destination == Mission.ABORT_STATION:
+        stop = stops[0]
+    elif destination == Mission.ABORT_FINAL_STOP:
+        stop = stops[-1]
+    else:
+        reached = None
+        for run in runs:
+            for row in _run_stop_state(run):
+                if row["arrived_at"] is None:
+                    continue
+                if reached is None or row["arrived_at"] > reached[0]:
+                    reached = (row["arrived_at"], row["stop"])
+        if reached is None:
+            raise ValidationError(
+                {
+                    "destination": "No stop has been recorded as reached yet; "
+                    "order a return to station or the planned final stop instead."
+                }
+            )
+        stop = reached[1]
+
+    if stop.latitude is None or stop.longitude is None:
+        raise ValidationError(
+            {"detail": f"{stop.location_name} has no coordinates to pin."}
+        )
+    return stop
+
+
+def abort_mission(mission, actor, *, destination, reason=""):
+    """The Operations Center aborts a mission in progress and pins its end.
+
+    The mission is not cancelled by the order: its vehicles are still out, so
+    the board keeps watching them while the drivers make for the pinned point.
+    Closing the mission stays the Operations Center's separate decision.
+    """
+    if mission.status != "active":
+        raise ValidationError(
+            {"detail": "Only a mission in progress can be aborted."}
+        )
+    if mission.aborted_at is not None:
+        raise ValidationError({"detail": "This mission has already been aborted."})
+
+    destination = str(destination or "").strip()
+    if destination not in ABORT_INSTRUCTIONS:
+        raise ValidationError(
+            {
+                "destination": "Choose a return to station, the last stop reached, "
+                "or the planned final stop."
+            }
+        )
+    text = " ".join(str(reason or "").split())[:500]
+    if not text:
+        raise ValidationError(
+            {"reason": "Tell the drivers why the mission is aborted."}
+        )
+
+    runs = _abort_runs(mission)
+    if not runs:
+        raise ValidationError(
+            {"detail": "This mission has no vehicle movement to end."}
+        )
+    stop = _abort_target(mission, destination, runs)
+
+    mission.aborted_at = timeutils.now()
+    mission.abort_reason = text
+    mission.abort_destination = destination
+    mission.abort_target_name = stop.location_name
+    mission.abort_target_latitude = stop.latitude
+    mission.abort_target_longitude = stop.longitude
+    mission.aborted_by = actor
+    mission.save(
+        update_fields=[
+            "aborted_at",
+            "abort_reason",
+            "abort_destination",
+            "abort_target_name",
+            "abort_target_latitude",
+            "abort_target_longitude",
+            "aborted_by",
+            "updated_at",
+        ]
+    )
+
+    instruction = f"{ABORT_INSTRUCTIONS[destination]} ({stop.location_name})"
+    for run in runs:
+        _event(
+            run,
+            MovementEvent.KIND_EXCEPTION,
+            actor=actor,
+            note=(
+                "Mission aborted by the Operations Center: "
+                f"{text} Instructed to {instruction}."
+            ),
+        )
+
+    from apps.ops.notifications import notify_many
+
+    drivers = {}
+    for run in runs:
+        if run.driver_id:
+            drivers[run.driver_id] = run.driver
+    return notify_many(
+        list(drivers.values()),
+        title=f"MISSION ABORTED: {mission.mission_number}",
+        message=(
+            f"The Operations Center aborted {mission.mission_number} "
+            f"({mission.title}). {text} You are instructed to {instruction} "
+            "and report when you arrive."
+        ),
+        level="danger",
+        category=ABORT_CATEGORY,
+        priority="urgent",
+        related=("mission", mission.id),
+        actor=actor,
+        action_url=f"/missions/{mission.id}/track/driver",
+        requires_action=False,
+    )
+
+
+def _handoff_mission_ids(user) -> set[str]:
+    """Mission ids whose handoff reached ``user``, in one read for the board."""
+    from apps.ops import aor_handoff
+
+    return set(
+        Notification.objects.filter(
+            recipient_id=getattr(user, "id", None),
+            category=aor_handoff.HANDOFF_CATEGORY,
+            related_type="mission",
+        ).values_list("related_id", flat=True)
+    )
 
 
 def _lead_run(user, mission):
@@ -463,7 +661,10 @@ def arrive_stop(run, stop, actor, *, at=None):
     if _stop_events(run, MovementEvent.KIND_DEPART_STOP).filter(stop=stop).exists():
         raise ValidationError({"detail": "This stop has already been departed."})
 
-    previous = [row for row in stops if row.sequence < stop.sequence]
+    # An abort replaces whatever was left of the plan: the driver heads for the
+    # pinned point, so the stops the order skipped are no longer a condition.
+    aborted = run.mission.aborted_at is not None
+    previous = [] if aborted else [row for row in stops if row.sequence < stop.sequence]
     origin_id = stops[0].id if stops else None
     for row in previous:
         # The first itinerary row is the origin. Its departure is the run's
@@ -479,7 +680,7 @@ def arrive_stop(run, stop, actor, *, at=None):
             raise ValidationError(
                 {"detail": f"Record arrival at stop {row.sequence} ({row.location_name}) first."}
             )
-    later = [row for row in stops if row.sequence > stop.sequence]
+    later = [] if aborted else [row for row in stops if row.sequence > stop.sequence]
     for row in later:
         if (
             _stop_events(run, MovementEvent.KIND_ARRIVE_STOP).filter(stop=row).exists()
@@ -541,6 +742,30 @@ def depart_stop(run, stop, actor, *, at=None):
 
 
 @transaction.atomic
+def _abort_stop(run):
+    """This run's own copy of the pinned abort target, if its plan has one.
+
+    Each vehicle keeps its own trip and itinerary, so the target is matched by
+    the name and coordinates the order pinned rather than by a foreign key.
+    """
+    mission = run.mission
+    if mission.aborted_at is None:
+        return None
+    for stop in run.trip.itinerary.all():
+        if stop.location_name != mission.abort_target_name:
+            continue
+        if (
+            mission.abort_target_latitude is None
+            or stop.latitude is None
+            or (
+                abs(stop.latitude - mission.abort_target_latitude) < 1e-6
+                and abs(stop.longitude - mission.abort_target_longitude) < 1e-6
+            )
+        ):
+            return stop
+    return None
+
+
 def complete_run(run, actor, *, at=None, note=""):
     if run.mission.status != "active":
         raise ValidationError({"detail": "This mission is not active."})
@@ -549,12 +774,33 @@ def complete_run(run, actor, *, at=None, note=""):
     stops = list(run.trip.itinerary.all())
     if stops:
         last = stops[-1]
-        arrived = _stop_events(run, MovementEvent.KIND_ARRIVE_STOP).filter(stop=last).exists() or _stop_events(
-            run, MovementEvent.KIND_ARRIVE_DESTINATION
-        ).filter(stop=last).exists()
-        if not arrived:
+        # After an abort the run ends at the pinned point, not at the plan's
+        # final stop. A return to station needs no arrival tap: closing the run
+        # is the record of the return.
+        target = _abort_stop(run)
+        if target is None and run.mission.aborted_at is None:
+            target = last
+        if (
+            target is not None
+            and run.mission.abort_destination != Mission.ABORT_STATION
+            and not (
+                _stop_events(run, MovementEvent.KIND_ARRIVE_STOP)
+                .filter(stop=target)
+                .exists()
+                or _stop_events(run, MovementEvent.KIND_ARRIVE_DESTINATION)
+                .filter(stop=target)
+                .exists()
+            )
+        ):
             raise ValidationError(
-                {"detail": "Record arrival at the final stop before completing this run."}
+                {
+                    "detail": (
+                        f"Record arrival at {target.location_name} before completing "
+                        "this run."
+                        if run.mission.aborted_at is not None
+                        else "Record arrival at the final stop before completing this run."
+                    )
+                }
             )
 
     actual = _actual(at)
@@ -976,7 +1222,45 @@ LIVE_AFTER_SECONDS = 60
 LIVE_TRAIL_LIMIT = 60
 
 
-def live_run(run, *, now=None):
+def _live_trails(run_ids):
+    """The last ``LIVE_TRAIL_LIMIT`` pings of every run, in one query.
+
+    A window function numbers each run's own pings newest first, so the limit
+    is applied per vehicle inside the database instead of asking for one
+    vehicle's pings at a time.
+    """
+    run_ids = list(run_ids)
+    if not run_ids:
+        return {}
+
+    numbered = (
+        TrackingPing.objects.filter(run_id__in=run_ids)
+        .annotate(
+            row=Window(
+                expression=RowNumber(),
+                partition_by="run_id",
+                order_by=[F("received_at").desc(), F("id").desc()],
+            )
+        )
+        .values("id", "row")
+    )
+    recent = (
+        TrackingPing.objects.filter(
+            id__in=Subquery(numbered.filter(row__lte=LIVE_TRAIL_LIMIT).values("id"))
+        )
+        .order_by("run_id", "-received_at", "-id")
+        .values_list("run_id", "latitude", "longitude")
+    )
+
+    trails: dict[int, list[list[float]]] = {}
+    for run_id, latitude, longitude in recent:
+        trails.setdefault(run_id, []).append([latitude, longitude])
+    for trail in trails.values():
+        trail.reverse()
+    return trails
+
+
+def live_run(run, *, now=None, stop_states=None, trail=None):
     """One vehicle run as the live ground map draws it.
 
     Positions are the driver's own pings, never inferred from the plan. The
@@ -984,19 +1268,27 @@ def live_run(run, *, now=None):
     driver is trying to do beside where they actually are.
     """
     now = now or timeutils.now()
-    stops = _run_stop_state(run)
+    stops = stop_states if stop_states is not None else _run_stop_state(run)
     pending = next(
         (row for row in stops if row["arrived_at"] is None and row["departed_at"] is None),
         None,
     )
-    trail = [
-        [ping.latitude, ping.longitude]
-        for ping in run.pings.order_by("-received_at", "-id")[:LIVE_TRAIL_LIMIT]
-    ]
-    trail.reverse()
+    if trail is None:
+        # Only reached when one run is read on its own; the board passes the
+        # whole set from a single batched query.
+        trail = [
+            [ping.latitude, ping.longitude]
+            for ping in run.pings.order_by("-received_at", "-id")[:LIVE_TRAIL_LIMIT]
+        ]
+        trail.reverse()
+    else:
+        trail = list(trail)
     age = (now - run.last_ping_at).total_seconds() if run.last_ping_at else None
     route = (run.trip.route_geometry or {}).get("coordinates") or []
     next_stop = pending["stop"] if pending else None
+    # The same lateness the driver's sheet and the delay alerts use: a convoy
+    # must be visible as late on the map, not only after somebody opens it.
+    delay = delay_for_run(run, now=now, stop_states=stops)
 
     return {
         "id": run.id,
@@ -1037,6 +1329,14 @@ def live_run(run, *, now=None):
             if isinstance(pair, (list, tuple)) and len(pair) >= 2
         ],
         "trail": trail,
+        "delay": {
+            "status": delay["status"],
+            "minutes": delay["minutes"],
+            "kind": delay["kind"],
+            "reason": delay["reason"],
+            "stop_sequence": delay["stop_sequence"],
+            "planned_at": delay["planned_at"],
+        },
     }
 
 
@@ -1050,24 +1350,45 @@ def live_board(user):
     """
     from apps.ops import services
 
-    missions = (
+    missions = list(
         services.visible_missions(user)
         .filter(category=Mission.CATEGORY_GROUND, status="active")
         .select_related("unit")
         .order_by("mission_number")
     )
     now = timeutils.now()
+
+    # One read per thing, never one per vehicle: this board is polled every few
+    # seconds, so a mission's runs, events, itinerary and pings are all fetched
+    # for the whole picture and then shared out in memory.
+    runs = list(
+        VehicleRun.objects.filter(mission__in=missions)
+        .exclude(status=VehicleRun.STATUS_CANCELLED)
+        .select_related("vehicle", "driver", "trip")
+        .prefetch_related("events", "trip__itinerary")
+        .order_by("vehicle__registration_number", "id")
+    )
+    stop_states = {run.id: _run_stop_state(run) for run in runs}
+    trails = _live_trails(run.id for run in runs)
+
+    runs_by_mission: dict[int, list[VehicleRun]] = {}
+    for run in runs:
+        runs_by_mission.setdefault(run.mission_id, []).append(run)
+
+    handoff_ids = _handoff_mission_ids(user)
+    caps_by_unit: dict[int, set[str]] = {}
+
     rows = []
     for mission in missions:
-        if not can_monitor(user, mission):
+        if mission.unit_id not in caps_by_unit:
+            caps_by_unit[mission.unit_id] = roles.capabilities_for(user, mission.unit_id)
+        if not can_monitor(
+            user,
+            mission,
+            capabilities=caps_by_unit[mission.unit_id],
+            handoff_ids=handoff_ids,
+        ):
             continue
-        runs = (
-            VehicleRun.objects.filter(mission=mission)
-            .exclude(status=VehicleRun.STATUS_CANCELLED)
-            .select_related("vehicle", "driver", "trip")
-            .prefetch_related("events", "trip__itinerary")
-            .order_by("vehicle__registration_number", "id")
-        )
         rows.append(
             {
                 "id": mission.id,
@@ -1079,7 +1400,16 @@ def live_board(user):
                 "longitude": mission.longitude,
                 "start_at": mission.start_at,
                 "dispatched_at": mission.dispatched_at,
-                "runs": [live_run(run, now=now) for run in runs],
+                "abort": abort_payload(mission),
+                "runs": [
+                    live_run(
+                        run,
+                        now=now,
+                        stop_states=stop_states[run.id],
+                        trail=trails.get(run.id, []),
+                    )
+                    for run in runs_by_mission.get(mission.id, [])
+                ],
             }
         )
     return {"generated_at": now, "missions": rows}
@@ -1126,10 +1456,15 @@ def _confirmed_origin_departure(run):
     return run.atd
 
 
-def _run_stop_state(run, events=None):
-    """The itinerary with the last recorded arrival/departure per stop."""
+def _run_stop_state(run, events=None, stops=None):
+    """The itinerary with the last recorded arrival/departure per stop.
+
+    ``stops`` may be supplied by a caller that has already loaded the itinerary
+    for a whole board. Reading the prefetched list reuses its cache, whereas
+    calling ``order_by`` on the manager would issue a query per run.
+    """
     events = list(events if events is not None else run.events.all())
-    stops = list(run.trip.itinerary.order_by("sequence"))
+    stops = list(stops) if stops is not None else list(run.trip.itinerary.all())
     origin_departure = _confirmed_origin_departure(run)
     rows = []
     for index, stop in enumerate(stops):
@@ -1160,7 +1495,7 @@ def _run_stop_state(run, events=None):
     return rows
 
 
-def delay_for_run(run, *, now=None):
+def delay_for_run(run, *, now=None, stop_states=None):
     """How far behind its own plan one vehicle is, and why.
 
     The comparison is always against a time a person planned (the trip's ETD,
@@ -1189,7 +1524,7 @@ def delay_for_run(run, *, now=None):
         report["reason"] = "This vehicle run is closed."
         return report
 
-    stops = _run_stop_state(run)
+    stops = stop_states if stop_states is not None else _run_stop_state(run)
     # The origin has no arrival; a confirmed departure satisfies it.
     pending = next(
         (row for row in stops if row["arrived_at"] is None and row["departed_at"] is None),
@@ -1403,6 +1738,7 @@ def snapshot(mission, user):
             "location_name": mission.location_name,
         },
         "runs": VehicleRunSerializer(visible, many=True).data,
+        "abort": abort_payload(mission),
         "delays": delay_report(mission) if (manage or monitor or lead or mine) else [],
         "delay_grace_minutes": DELAY_GRACE_MINUTES,
         "can_monitor": monitor or manage,
