@@ -499,6 +499,77 @@ def test_an_outsider_cannot_report_an_emergency(
     assert not Notification.objects.filter(category="emergency").exists()
 
 
+def test_the_ground_map_shows_running_missions_with_the_drivers_feed(
+    as_user, planner, driver, tracked_mission
+):
+    mission, trip, vehicle, _origin, _destination = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    now = timeutils.now()
+    as_user(driver).post(
+        f"/api/missions/{mission.id}/tracking/ping/",
+        {
+            "run": run.id,
+            "pings": [
+                {
+                    "latitude": 14.61,
+                    "longitude": 121.07,
+                    "recorded_at": (now - dt.timedelta(minutes=2)).isoformat(),
+                },
+                {
+                    "latitude": 14.62,
+                    "longitude": 121.08,
+                    "recorded_at": (now - dt.timedelta(minutes=1)).isoformat(),
+                },
+            ],
+        },
+        format="json",
+    )
+
+    body = as_user(planner).get("/api/gis/ground-live/").json()
+
+    assert [row["id"] for row in body["missions"]] == [mission.id]
+    row = body["missions"][0]["runs"][0]
+    assert row["registration_number"] == vehicle.registration_number
+    assert row["is_live"] is True
+    assert row["latitude"] == pytest.approx(14.62)
+    assert row["trail"] == [[14.61, 121.07], [14.62, 121.08]]
+    # The origin is a departure point awaiting the driver's confirmation, so it
+    # is the next stop and nothing is recorded yet.
+    assert row["stop_count"] == 2
+    assert row["next_stop"]["sequence"] == 1
+    assert row["recorded_stops"] == 0
+
+
+def test_the_ground_map_drops_a_mission_that_is_no_longer_running(
+    as_user, planner, tracked_mission
+):
+    mission, *_ = tracked_mission
+    start(as_user(planner), mission)
+    assert as_user(planner).get("/api/gis/ground-live/").json()["missions"]
+
+    as_user(planner).post(
+        f"/api/missions/{mission.id}/tracking/complete/",
+        {"force": True, "note": "Vehicle returned"},
+        format="json",
+    )
+
+    assert as_user(planner).get("/api/gis/ground-live/").json()["missions"] == []
+
+
+def test_the_ground_map_is_empty_for_an_unrelated_unit(
+    as_user, planner, tracked_mission, other_unit
+):
+    mission, *_ = tracked_mission
+    start(as_user(planner), mission)
+    outsider = make_user(unit=other_unit, authority="Creator")
+
+    response = as_user(outsider).get("/api/gis/ground-live/")
+
+    assert response.status_code == 200, response.content
+    assert response.json()["missions"] == []
+
+
 def test_a_ping_with_a_bad_position_is_rejected(
     as_user, planner, driver, tracked_mission
 ):

@@ -3903,8 +3903,55 @@ dl.details {
   font-size: 12px;
 }
 
+.ground-view-switch {
+  margin-bottom: 12px;
+}
+
 .map-canvas-dashboard {
   height: 460px;
+}
+
+/* Live ground movement: a vehicle is a dot with its plate beside it, a mission
+   is the count of vehicles currently reporting to it. */
+.ground-vehicle-pin {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  background: #a371f7;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.35);
+}
+
+.ground-vehicle-pin span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.ground-vehicle-pin.is-lead {
+  background: #f0b429;
+}
+
+.ground-vehicle-pin.is-stale {
+  background: #8b949e;
+  opacity: 0.75;
+}
+
+.ground-mission-pin {
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border: 2px solid #ffffff;
+  background: rgba(63, 185, 80, 0.92);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.35);
+}
+
+.ground-mission-pin.is-idle {
+  background: rgba(139, 148, 158, 0.9);
 }
 
 /* Mission tracking: one large map in its own tab, with a narrow side panel. */

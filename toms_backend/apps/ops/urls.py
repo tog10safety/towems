@@ -40,6 +40,11 @@ urlpatterns = [
         views.OperationalPictureView.as_view(),
         name="gis-operational-picture",
     ),
+    path(
+        "gis/ground-live/",
+        views.GroundLiveMapView.as_view(),
+        name="gis-ground-live",
+    ),
     path("gis/search/", views.GeocodeSearchView.as_view(), name="gis-search"),
     path("gis/places/", views.PlaceSearchView.as_view(), name="gis-places"),
     path("gis/pin/", views.PinLocationView.as_view(), name="gis-pin"),

@@ -965,6 +965,127 @@ def send_emergency(mission, run, actor, *, note=""):
 
 
 # ---------------------------------------------------------------------------
+# Live ground picture
+# ---------------------------------------------------------------------------
+
+#: A driver's feed stops being "live" after this long without a fix. The phone
+#: sends a batch every few seconds, so a minute of silence means the console
+#: should see "not reporting" rather than a stale dot labelled live.
+LIVE_AFTER_SECONDS = 60
+#: How much of the driven trail the map draws per vehicle.
+LIVE_TRAIL_LIMIT = 60
+
+
+def live_run(run, *, now=None):
+    """One vehicle run as the live ground map draws it.
+
+    Positions are the driver's own pings, never inferred from the plan. The
+    planned route and the next stop are included so the map can show what the
+    driver is trying to do beside where they actually are.
+    """
+    now = now or timeutils.now()
+    stops = _run_stop_state(run)
+    pending = next(
+        (row for row in stops if row["arrived_at"] is None and row["departed_at"] is None),
+        None,
+    )
+    trail = [
+        [ping.latitude, ping.longitude]
+        for ping in run.pings.order_by("-received_at", "-id")[:LIVE_TRAIL_LIMIT]
+    ]
+    trail.reverse()
+    age = (now - run.last_ping_at).total_seconds() if run.last_ping_at else None
+    route = (run.trip.route_geometry or {}).get("coordinates") or []
+    next_stop = pending["stop"] if pending else None
+
+    return {
+        "id": run.id,
+        "registration_number": run.vehicle.registration_number,
+        "vehicle_type": run.vehicle.vehicle_type,
+        "driver_name": run.driver.full_name if run.driver_id else "",
+        "is_lead": bool(run.is_lead),
+        "status": run.status,
+        "etd": run.etd,
+        "atd": run.atd,
+        "last_ping_at": run.last_ping_at,
+        "latitude": run.last_latitude,
+        "longitude": run.last_longitude,
+        "accuracy_m": run.last_accuracy_m,
+        "age_seconds": int(age) if age is not None else None,
+        "is_live": bool(age is not None and age <= LIVE_AFTER_SECONDS),
+        "recorded_stops": sum(
+            1 for row in stops if row["departed_at"] is not None or row["arrived_at"] is not None
+        ),
+        "stop_count": len(stops),
+        "next_stop": (
+            {
+                "sequence": next_stop.sequence,
+                "location_name": next_stop.location_name,
+                "latitude": next_stop.latitude,
+                "longitude": next_stop.longitude,
+                "planned_arrival": next_stop.planned_arrival,
+                "planned_departure": next_stop.planned_departure,
+            }
+            if next_stop is not None
+            else None
+        ),
+        # The plan is stored as GeoJSON [longitude, latitude]; the map wants
+        # [latitude, longitude] and the browser should not have to guess.
+        "route": [
+            [pair[1], pair[0]]
+            for pair in route
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2
+        ],
+        "trail": trail,
+    }
+
+
+def live_board(user):
+    """Every in-progress ground mission this caller may watch, with feeds.
+
+    Only monitoring authority reads this picture: a unit's drivers appear on
+    their own Operations Center's map, never on an unrelated account's.
+    Raising an alert is deliberately not part of a read - opening the map must
+    not page anybody.
+    """
+    from apps.ops import services
+
+    missions = (
+        services.visible_missions(user)
+        .filter(category=Mission.CATEGORY_GROUND, status="active")
+        .select_related("unit")
+        .order_by("mission_number")
+    )
+    now = timeutils.now()
+    rows = []
+    for mission in missions:
+        if not can_monitor(user, mission):
+            continue
+        runs = (
+            VehicleRun.objects.filter(mission=mission)
+            .exclude(status=VehicleRun.STATUS_CANCELLED)
+            .select_related("vehicle", "driver", "trip")
+            .prefetch_related("events", "trip__itinerary")
+            .order_by("vehicle__registration_number", "id")
+        )
+        rows.append(
+            {
+                "id": mission.id,
+                "mission_number": mission.mission_number,
+                "title": mission.title,
+                "unit_acronym": mission.unit.acronym if mission.unit_id else "",
+                "location_name": mission.location_name,
+                "latitude": mission.latitude,
+                "longitude": mission.longitude,
+                "start_at": mission.start_at,
+                "dispatched_at": mission.dispatched_at,
+                "runs": [live_run(run, now=now) for run in runs],
+            }
+        )
+    return {"generated_at": now, "missions": rows}
+
+
+# ---------------------------------------------------------------------------
 # Delay monitoring
 # ---------------------------------------------------------------------------
 

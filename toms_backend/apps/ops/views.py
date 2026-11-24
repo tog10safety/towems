@@ -6863,6 +6863,22 @@ class MGRSConvertView(APIView):
         )
 
 
+class GroundLiveMapView(APIView):
+    """In-progress ground missions with their vehicles' driver feeds.
+
+    A working picture, not a register: a mission appears while it is active and
+    the coordinates come from the driver's phone. Accounts without monitoring
+    authority receive an empty picture rather than another unit's movement.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.ops import tracking as tracking_service
+
+        return Response(tracking_service.live_board(request.user))
+
+
 class OperationalPictureView(APIView):
     """Everything the dashboard map draws, in one unit-scoped payload.
 

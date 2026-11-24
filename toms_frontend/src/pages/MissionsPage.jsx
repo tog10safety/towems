@@ -7,6 +7,7 @@ import Icon from "../components/Icon.jsx";
 import PdfViewer from "../components/PdfViewer.jsx";
 import SuperAdminDelete from "../components/SuperAdminDelete.jsx";
 import AirOperationsBoard from "../components/AirOperationsBoard.jsx";
+import GroundOperationsMap from "../components/GroundOperationsMap.jsx";
 import { useApi } from "../hooks/useApi.js";
 import { formatDateTime } from "../utils/format.js";
 
@@ -75,6 +76,9 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
   const [startAfter, setStartAfter] = useState("");
   const [startBefore, setStartBefore] = useState("");
   const [page, setPage] = useState(1);
+  // Ground mirrors Flight Operations: the register and the live picture are two
+  // views of the same work, chosen by a switch rather than stacked.
+  const [groundView, setGroundView] = useState("board");
 
   const path = `/missions/${qs({
     category,
@@ -223,6 +227,32 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
       {category === "air" ? (
         <AirOperationsBoard />
       ) : (
+        <>
+        <div
+          className="flight-view-switch ground-view-switch"
+          role="group"
+          aria-label="Ground Operations view"
+        >
+          <button
+            type="button"
+            className={`flight-view-button ${groundView === "board" ? "is-active" : ""}`}
+            aria-pressed={groundView === "board"}
+            onClick={() => setGroundView("board")}
+          >
+            Board
+          </button>
+          <button
+            type="button"
+            className={`flight-view-button ${groundView === "map" ? "is-active" : ""}`}
+            aria-pressed={groundView === "map"}
+            onClick={() => setGroundView("map")}
+          >
+            Map View
+          </button>
+        </div>
+        {groundView === "map" ? (
+          <GroundOperationsMap />
+        ) : (
         <Card>
         <div className="inline-row" style={{ marginBottom: 10 }}>
           <Input
@@ -554,6 +584,8 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
           </>
         )}
         </Card>
+        )}
+        </>
       )}
 
       {preview && (

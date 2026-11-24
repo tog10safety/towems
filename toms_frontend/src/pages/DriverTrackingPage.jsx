@@ -29,7 +29,9 @@ import { formatDateTime } from "../utils/format.js";
  * always a deliberate tap, never inferred from a breadcrumb.
  */
 
-const FLUSH_MS = 12000;
+// Short enough that the Operations Center sees the vehicle move, long enough
+// that a phone on a weak signal is not sending a request every second.
+const FLUSH_MS = 4000;
 const BATCH = 60;
 const MAX_QUEUE = 200;
 const DEFAULT_CENTER = [12.8797, 121.774];
@@ -545,7 +547,7 @@ export default function DriverTrackingPage() {
         setQueued(queue.current.length);
         setLastFix({ latitude, longitude, accuracy });
         setGpsState("live");
-        if (queue.current.length >= 12) flush();
+        if (queue.current.length >= 4) flush();
       },
       (err) => {
         setGpsError(
