@@ -3089,9 +3089,12 @@ dl.details {
   .shell {
     grid-template-columns: 1fr;
   }
+  /* Half the screen: the drawer covers up to the centre of the browser so the
+     nav labels and their tap targets are readable on a phone, and the content
+     behind it stays visible as a reminder of what the drawer opened over. */
   .sidebar {
     position: fixed;
-    inset: 0 60% 0 0;
+    inset: 0 50% 0 0;
     transform: translateX(-102%);
     transition: transform 0.2s ease;
     height: 100vh;
