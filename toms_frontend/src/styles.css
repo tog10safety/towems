@@ -3687,10 +3687,15 @@ dl.details {
 }
 
 /* Full screen is the live map's own mode: the card leaves the page layout and
-   fills the viewport, with the map taking every pixel the header leaves. */
+   fills the app's content frame - the sidebar and top bar stay usable - with
+   the map taking every pixel the card header leaves. The component supplies
+   the frame's left and top offsets from the live layout. */
 .map-card.is-fullscreen {
   position: fixed;
-  inset: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  top: 0;
   z-index: 1100;
   margin: 0;
   border-radius: 0;
@@ -3725,35 +3730,104 @@ body.map-fullscreen-open {
   overflow: hidden;
 }
 
-/* Map style and the full-screen toggle share one floating panel, inside the
-   map frame rather than above it. */
-.ground-map-overlay {
-  width: 220px;
+/* The maps that can fill the app's content frame pin their own layout, not just
+   the canvas: the route/details panels and the aircraft list stay on screen and
+   usable, exactly where they were. The ground board pins its whole card. */
+.map-layout-track.is-fullscreen,
+.air-sim-layout.is-fullscreen {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  z-index: 1100;
+  padding: 12px;
+  background: var(--bg-elevated);
 }
 
-.ground-map-overlay-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+.map-layout-track.is-fullscreen {
+  display: grid;
+  grid-template-columns: 1fr;
 }
 
-.ground-map-expand {
+.map-layout-track.is-fullscreen .map-canvas-track {
+  height: 100%;
+  min-height: 0;
+}
+
+.air-sim-layout.is-fullscreen {
+  align-items: stretch;
+}
+
+.air-sim-layout.is-fullscreen .air-sim-canvas {
+  height: auto;
+  min-height: 0;
+}
+
+.air-sim-layout.is-fullscreen .air-sim-side {
+  max-height: none;
+}
+
+/* Two separate floating buttons inside the map frame: the style swatch and the
+   full-screen toggle. Neither carries a label over the picture. */
+.map-frame-tools {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1150;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.map-frame-expand {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: var(--bg-elevated);
   color: var(--text);
   cursor: pointer;
+  box-shadow: var(--shadow);
 }
 
-.ground-map-expand:hover {
+.map-frame-expand:hover {
+  border-color: var(--accent);
+}
+
+.basemap-icon {
+  position: relative;
+}
+
+.basemap-icon-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--bg-elevated);
-  filter: brightness(1.08);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.basemap-icon-button:hover {
+  border-color: var(--accent);
+}
+
+.basemap-icon-button .basemap-thumb {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+.basemap-icon .basemap-list {
+  left: auto;
+  right: 0;
+  width: 220px;
+  z-index: 1200;
 }
 
 .map-filters {

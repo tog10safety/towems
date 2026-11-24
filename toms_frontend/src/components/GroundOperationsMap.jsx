@@ -7,8 +7,10 @@ import { useApi } from "../hooks/useApi.js";
 import { useTheme } from "../theme/ThemeContext.jsx";
 import AbortMissionDialog from "./AbortMissionDialog.jsx";
 import { Badge, Button, ErrorBanner, Loading } from "./ui.jsx";
-import BasemapControl from "./map/BasemapControl.jsx";
 import MapBasemapLayer from "./map/MapBasemapLayer.jsx";
+import MapFrameControls from "./map/MapFrameControls.jsx";
+import MapResize from "./map/MapResize.jsx";
+import useMapFullScreen from "../hooks/useMapFullScreen.js";
 import {
   BASEMAP_STORAGE_KEY,
   readStored,
@@ -76,41 +78,6 @@ function abortTargetIcon() {
   });
 }
 
-/** Corners out for full screen, corners in to leave it. */
-function ExpandGlyph({ expanded }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {expanded ? (
-        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
-      ) : (
-        <path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />
-      )}
-    </svg>
-  );
-}
-
-/** Leaflet caches its own size: a full-screen switch has to re-measure it. */
-function MapResize({ expanded }) {
-  const map = useMap();
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => map.invalidateSize());
-    return () => window.cancelAnimationFrame(frame);
-  }, [expanded, map]);
-
-  return null;
-}
-
 /** Fit the picture once per set of missions, not on every four-second poll. */
 function GroundFit({ points, signature }) {
   const map = useMap();
@@ -145,7 +112,9 @@ export default function GroundOperationsMap() {
   const [basemapFailure, setBasemapFailure] = useState("");
   const [updatedAt, setUpdatedAt] = useState(null);
   const [now, setNow] = useState(() => Date.now());
-  const [fullScreen, setFullScreen] = useState(false);
+  // Full screen fills the app's content frame, not the browser window: the
+  // sidebar and top bar keep their buttons. Shared with the other maps.
+  const { fullScreen, frame, toggleFullScreen } = useMapFullScreen();
 
   const basemap = useMemo(
     () => resolveBasemap(config.data, basemapId, resolvedTheme),
@@ -168,21 +137,6 @@ export default function GroundOperationsMap() {
   useEffect(() => {
     if (data) setUpdatedAt(Date.now());
   }, [data]);
-
-  // Full screen is the map's own mode: Escape leaves it, and the page behind it
-  // does not scroll while it is open.
-  useEffect(() => {
-    if (!fullScreen) return undefined;
-    document.body.classList.add("map-fullscreen-open");
-    function onKey(event) {
-      if (event.key === "Escape") setFullScreen(false);
-    }
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.body.classList.remove("map-fullscreen-open");
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [fullScreen]);
 
   // A moving "seconds ago" is how an operator tells a live feed from a frozen
   // one at a glance.
@@ -226,7 +180,10 @@ export default function GroundOperationsMap() {
   }
 
   return (
-    <section className={`card map-card${fullScreen ? " is-fullscreen" : ""}`}>
+    <section
+      className={`card map-card${fullScreen ? " is-fullscreen" : ""}`}
+      style={fullScreen ? { left: frame.left, top: frame.top } : undefined}
+    >
       <header className="card-head">
         <div>
           <h2>Live ground movement</h2>
@@ -266,28 +223,13 @@ export default function GroundOperationsMap() {
 
         <div className="map-layout">
           <div className="map-canvas map-canvas-dashboard">
-            <div className="map-style-overlay ground-map-overlay">
-              <div className="ground-map-overlay-head">
-                <span className="hint">Map style</span>
-                <button
-                  type="button"
-                  className="ground-map-expand"
-                  onClick={() => setFullScreen((value) => !value)}
-                  aria-pressed={fullScreen}
-                  aria-label={fullScreen ? "Leave full screen" : "Show the map full screen"}
-                  title={fullScreen ? "Leave full screen (Esc)" : "Full screen"}
-                >
-                  <ExpandGlyph expanded={fullScreen} />
-                </button>
-              </div>
-              <BasemapControl
-                config={config.data}
-                value={basemap?.id}
-                onChange={chooseBasemap}
-                compact
-                showLabel={false}
-              />
-            </div>
+            <MapFrameControls
+              config={config.data}
+              value={basemap?.id}
+              onChangeBasemap={chooseBasemap}
+              fullScreen={fullScreen}
+              onToggleFullScreen={toggleFullScreen}
+            />
             {loading && !data ? (
               <Loading label="Loading ground movement…" />
             ) : (
@@ -453,12 +395,6 @@ export default function GroundOperationsMap() {
           </div>
         </div>
 
-        {!loading && missions.length === 0 && (
-          <p className="hint" style={{ marginTop: 10 }}>
-            No ground mission you can watch is in progress. The picture fills once the
-            Operations Center dispatches one and its drivers start sharing their position.
-          </p>
-        )}
       </div>
 
       {abortMission && (

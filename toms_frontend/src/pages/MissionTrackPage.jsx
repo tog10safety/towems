@@ -20,7 +20,9 @@ import {
 } from "../components/ui.jsx";
 import PdfViewer from "../components/PdfViewer.jsx";
 import Icon from "../components/Icon.jsx";
-import BasemapControl from "../components/map/BasemapControl.jsx";
+import MapFrameControls from "../components/map/MapFrameControls.jsx";
+import MapResize from "../components/map/MapResize.jsx";
+import useMapFullScreen from "../hooks/useMapFullScreen.js";
 import MapBasemapLayer from "../components/map/MapBasemapLayer.jsx";
 import { useApi } from "../hooks/useApi.js";
 import { useTheme } from "../theme/ThemeContext.jsx";
@@ -103,6 +105,8 @@ export default function MissionTrackPage() {
   // Both panels live over the map and open from icons on the map itself, so the
   // page header stays a header instead of a row of toggles.
   const [panelOpen, setPanelOpen] = useState(false);
+  // The map's own full-screen mode, shared with the other maps.
+  const { fullScreen, frame, toggleFullScreen } = useMapFullScreen();
   const [infoOpen, setInfoOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
 
@@ -309,8 +313,18 @@ export default function MissionTrackPage() {
         </div>
       )}
 
-      <div className="map-layout map-layout-track">
+      <div
+        className={`map-layout map-layout-track${fullScreen ? " is-fullscreen" : ""}`}
+        style={fullScreen ? { left: frame.left, top: frame.top } : undefined}
+      >
         <div className="map-canvas map-canvas-track">
+          <MapFrameControls
+            config={config.data}
+            value={basemap?.id}
+            onChangeBasemap={chooseBasemap}
+            fullScreen={fullScreen}
+            onToggleFullScreen={toggleFullScreen}
+          />
           <div className="map-fabs" role="group" aria-label="Map panels">
             <button
               type="button"
@@ -342,6 +356,7 @@ export default function MissionTrackPage() {
               basemap={basemap}
               onError={(value) => setBasemapFailure(value)}
             />
+            <MapResize expanded={fullScreen} />
             <FitTrack points={boundsPoints} panelOpen={panelOpen} />
 
             {missionPoint && (
@@ -658,15 +673,7 @@ export default function MissionTrackPage() {
             planned order. Nothing here is a live GPS position.
           </p>
 
-          <h3>Map style</h3>
-          <BasemapControl
-            config={config.data}
-            value={basemap?.id}
-            onChange={chooseBasemap}
-            compact
-          />
-
-          <h3 style={{ marginTop: 16 }}>Vehicles & routes</h3>
+          <h3>Vehicles & routes</h3>
           {trips.length === 0 ? (
             <p className="hint">No vehicle is assigned to this mission.</p>
           ) : (

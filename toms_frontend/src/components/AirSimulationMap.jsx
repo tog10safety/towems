@@ -20,7 +20,9 @@ import {
 } from "../map/config.js";
 import { AIR_ASSET_GLYPHS, aircraftTypeGroup } from "../map/airAssets.jsx";
 import { Button, EmptyState, ErrorBanner, Loading } from "./ui.jsx";
-import BasemapControl from "./map/BasemapControl.jsx";
+import MapFrameControls from "./map/MapFrameControls.jsx";
+import MapResize from "./map/MapResize.jsx";
+import useMapFullScreen from "../hooks/useMapFullScreen.js";
 import MapBasemapLayer from "./map/MapBasemapLayer.jsx";
 import Icon from "./Icon.jsx";
 import { formatDateTime, formatTime } from "../utils/format.js";
@@ -253,6 +255,8 @@ export default function AirSimulationMap({ date }) {
     readStored(BASEMAP_STORAGE_KEY, "")
   );
   const [basemapFailure, setBasemapFailure] = useState("");
+  // The map's own full-screen mode, shared with the other maps.
+  const { fullScreen, frame, toggleFullScreen } = useMapFullScreen();
   const [selectedId, setSelectedId] = useState("");
   const [hiddenTracks, setHiddenTracks] = useState(() => new Set());
   const [focusToken, setFocusToken] = useState(0);
@@ -409,8 +413,18 @@ export default function AirSimulationMap({ date }) {
       ) : rows.length === 0 ? (
         <EmptyState message="No planned or active aircraft are recorded for this operations date." />
       ) : (
-        <div className="air-sim-layout">
+        <div
+          className={`air-sim-layout${fullScreen ? " is-fullscreen" : ""}`}
+          style={fullScreen ? { left: frame.left, top: frame.top } : undefined}
+        >
           <div className="air-sim-canvas">
+            <MapFrameControls
+              config={config.data}
+              value={basemap?.id}
+              onChangeBasemap={chooseBasemap}
+              fullScreen={fullScreen}
+              onToggleFullScreen={toggleFullScreen}
+            />
             <MapContainer
               center={mapPoints[0] || DEFAULT_CENTER}
               zoom={mapPoints.length ? 9 : 6}
@@ -420,6 +434,7 @@ export default function AirSimulationMap({ date }) {
                 basemap={basemap}
                 onError={() => setBasemapFailure(basemap?.id || "")}
               />
+              <MapResize expanded={fullScreen} />
               <MapController
                 points={mapPoints}
                 fitToken={fitToken}
@@ -629,15 +644,6 @@ export default function AirSimulationMap({ date }) {
               ))}
             </div>
 
-            <div className="air-sim-map-style">
-              <span className="hint">Map style</span>
-              <BasemapControl
-                config={config.data}
-                value={basemap?.id}
-                onChange={chooseBasemap}
-                compact
-              />
-            </div>
           </aside>
         </div>
       )}
