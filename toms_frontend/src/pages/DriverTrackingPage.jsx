@@ -114,6 +114,40 @@ function haversineKm(first, second) {
   return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/** Compass bearing from one point to the next, clockwise from north. */
+function bearingDegrees(first, second) {
+  if (!Array.isArray(first) || !Array.isArray(second)) return null;
+  const toRad = (value) => (value * Math.PI) / 180;
+  const toDeg = (value) => (value * 180) / Math.PI;
+  const [lat1, lon1] = first;
+  const [lat2, lon2] = second;
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * Which way the vehicle is pointing.
+ *
+ * The phone reports a bearing only while it is moving; the course from the
+ * previous fix fills the gap, and a parked vehicle keeps its last known
+ * direction instead of losing its arrow between fixes.
+ */
+function headingDegrees(previous, latitude, longitude, reported) {
+  if (Number.isFinite(reported)) return reported;
+  if (!previous || Number.isFinite(previous.latitude) === false) return null;
+  const moved = haversineKm(
+    [previous.latitude, previous.longitude],
+    [latitude, longitude]
+  );
+  // A few metres of GPS noise is not a turn: keep the arrow still.
+  if (moved == null || moved < 0.01) return previous.heading ?? null;
+  return bearingDegrees([previous.latitude, previous.longitude], [latitude, longitude]);
+}
+
 /**
  * The itinerary as it was recorded: origin, every stop, destination, in order.
  * Stop names are shown exactly as the plan stores them - the label must never
@@ -156,27 +190,103 @@ function stopPin(stop, isNext, isFinal, isSuperseded = false) {
   });
 }
 
+/**
+ * The driver's own marker: a dot, with a cone that DriverHeading turns to the
+ * way the vehicle is travelling, so the map reads like a phone map.
+ *
+ * The icon is built once. Rebuilding it per bearing would replace the element
+ * on every fix and restart the halo animation.
+ */
 const SELF_ICON = divIcon({
   className: "driver-self",
-  html: '<span class="driver-self-halo"></span><span class="driver-self-dot"></span>',
+  html: '<span class="driver-self-halo"></span><span class="driver-self-cone"></span><span class="driver-self-dot"></span>',
   iconSize: [46, 46],
   iconAnchor: [23, 23],
 });
 
-/** Fit the map to the route and position once, and again after any resize. */
-function DriverMapFit({ points, revision }) {
+/** Turn the marker's cone in place, and hide it until a bearing is known. */
+function DriverHeading({ heading }) {
   const map = useMap();
-  const key = points.map((point) => point.join(",")).join("|");
 
   useEffect(() => {
-    // Showing the panel or maximising the map changes the container size
-    // without a window resize, which Leaflet does not notice by itself.
-    map.invalidateSize();
-    if (points.length === 1) map.setView(points[0], 15);
-    else if (points.length > 1) {
-      map.fitBounds(points, { padding: [44, 44], maxZoom: 15 });
+    const marker = map.getContainer().querySelector(".driver-self");
+    const cone = marker?.querySelector(".driver-self-cone");
+    if (!marker || !cone) return;
+    if (Number.isFinite(heading)) {
+      marker.classList.add("has-heading");
+      cone.style.transform = `rotate(${Math.round(heading) % 360}deg)`;
+    } else {
+      marker.classList.remove("has-heading");
     }
-  }, [key, revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [map, heading]);
+
+  return null;
+}
+
+/**
+ * Position the map on the plan once, then leave the driver's own view alone.
+ *
+ * The fit is keyed on the plan, never on the live position: sending a location
+ * must not take the map back from a driver who has zoomed in. A pan or a zoom
+ * by the driver also ends automatic fitting, the way a phone map behaves.
+ * Leaflet is still told when its container changes size - the sheet opening,
+ * the map being maximised, the phone turning - which it cannot notice itself.
+ */
+function DriverMapFit({ points, planKey, layoutKey, abortKey }) {
+  const map = useMap();
+  const fittedPlan = useRef(null);
+  const fittedOnce = useRef(false);
+  const movedByDriver = useRef(false);
+  const lastAbort = useRef("");
+  const latestPoints = useRef(points);
+  latestPoints.current = points;
+
+  useEffect(() => {
+    const node = map.getContainer();
+    const claim = () => {
+      movedByDriver.current = true;
+    };
+    // Only a gesture starts these; a programmatic fit does not.
+    node.addEventListener("pointerdown", claim);
+    node.addEventListener("wheel", claim, { passive: true });
+    node.addEventListener("touchstart", claim, { passive: true });
+    return () => {
+      node.removeEventListener("pointerdown", claim);
+      node.removeEventListener("wheel", claim);
+      node.removeEventListener("touchstart", claim);
+    };
+  }, [map]);
+
+  // A new container size keeps the view the driver is on.
+  useEffect(() => {
+    map.invalidateSize({ pan: false });
+  }, [map, layoutKey]);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const node = map.getContainer();
+    const observer = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [map]);
+
+  useEffect(() => {
+    const plan = latestPoints.current;
+    if (!plan.length) return;
+    // An abort order is the one thing that may still take the map: the driver
+    // has to be shown where to go, whatever they were looking at.
+    const forced = Boolean(abortKey) && lastAbort.current !== abortKey;
+    lastAbort.current = abortKey || "";
+    if (!forced) {
+      if (fittedPlan.current === planKey) return;
+      // Once the driver has moved the map, a new plan may not move it back.
+      if (fittedOnce.current && movedByDriver.current) return;
+    }
+    fittedPlan.current = planKey;
+    fittedOnce.current = true;
+    if (plan.length === 1) map.setView(plan[0], 15);
+    else map.fitBounds(plan, { padding: [44, 44], maxZoom: 15 });
+  }, [map, planKey, abortKey]);
 
   return null;
 }
@@ -451,19 +561,32 @@ export default function DriverTrackingPage() {
       ? haversineKm(selfPoint, [nextStop.latitude, nextStop.longitude])
       : null;
 
-  const mapPoints = [...route];
+  // What the map fits: the plan, never the live position. Including the
+  // vehicle's own fix here made every location sent re-fit the map, which is
+  // what pulled a driver's zoom back out.
+  const planPoints = [...route];
   activeStops.forEach((stop) => {
     if (stop.latitude != null && stop.longitude != null) {
-      mapPoints.push([stop.latitude, stop.longitude]);
+      planPoints.push([stop.latitude, stop.longitude]);
     }
   });
-  if (selfPoint) mapPoints.push(selfPoint);
   if (
     data?.abort?.target?.latitude != null &&
     data.abort.target.longitude != null
   ) {
-    mapPoints.push([data.abort.target.latitude, data.abort.target.longitude]);
+    planPoints.push([data.abort.target.latitude, data.abort.target.longitude]);
   }
+  // A different plan - a stop added, an abort point pinned - is the only thing
+  // that may reposition the map; a new status or a new fix may not.
+  const planKey = [
+    route.length > 1 ? "routed" : "direct",
+    activeStops
+      .map((stop) => `${stop.id}:${stop.latitude},${stop.longitude}`)
+      .join("|"),
+    data?.abort?.target
+      ? `${data.abort.target.latitude},${data.abort.target.longitude}`
+      : "",
+  ].join("~");
 
   // Restore any breadcrumbs that were never sent before the page was closed.
   useEffect(() => {
@@ -591,7 +714,12 @@ export default function DriverTrackingPage() {
         queue.current = [...queue.current, row].slice(-MAX_QUEUE);
         persist();
         setQueued(queue.current.length);
-        setLastFix({ latitude, longitude, accuracy });
+        setLastFix((previous) => ({
+          latitude,
+          longitude,
+          accuracy,
+          heading: headingDegrees(previous, latitude, longitude, heading),
+        }));
         setGpsState("live");
         if (queue.current.length >= 4) flush();
       },
@@ -940,8 +1068,9 @@ export default function DriverTrackingPage() {
         <div className="driver-stage">
           <div className="driver-map">
             <MapContainer
-              center={mapPoints[0] || DEFAULT_CENTER}
-              zoom={mapPoints.length ? 13 : 6}
+              center={planPoints[0] || DEFAULT_CENTER}
+              zoom={planPoints.length ? 13 : 6}
+              dragging
               zoomControl={false}
               scrollWheelZoom
             >
@@ -951,8 +1080,14 @@ export default function DriverTrackingPage() {
                 onError={() => setBasemapFailure(basemap?.id || "")}
               />
               <DriverMapFit
-                points={mapPoints}
-                revision={`${expanded}:${route.length}:${sheetOpen}`}
+                points={planPoints}
+                planKey={planKey}
+                layoutKey={`${expanded}:${sheetOpen}`}
+                abortKey={
+                  data?.abort?.target
+                    ? `${data.abort.target.latitude},${data.abort.target.longitude}`
+                    : ""
+                }
               />
               <DriverRecenter point={selfPoint} token={focusToken} />
 
@@ -1044,6 +1179,9 @@ export default function DriverTrackingPage() {
                     {lastFix?.accuracy ? ` · ±${Math.round(lastFix.accuracy)} m` : ""}
                   </Popup>
                 </Marker>
+              )}
+              {selfPoint && (
+                <DriverHeading heading={lastFix?.heading ?? null} />
               )}
             </MapContainer>
 

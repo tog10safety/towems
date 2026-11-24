@@ -4511,6 +4511,17 @@ body.map-fullscreen-open {
 .driver-map .leaflet-container {
   height: 100%;
   width: 100%;
+  /* Panned and pinched like a phone map; Leaflet keeps its own touch-action. */
+  cursor: grab;
+}
+
+/* Pins and popups stay tappable rather than looking draggable. */
+.driver-map .leaflet-container .leaflet-interactive {
+  cursor: pointer;
+}
+
+.driver-map .leaflet-container.leaflet-dragging {
+  cursor: grabbing;
 }
 
 /* Leaflet paints its panes and its control corners with z-index values up to
@@ -4977,6 +4988,28 @@ body.map-fullscreen-open {
 
 .driver-self {
   position: relative;
+}
+
+/* Which way the vehicle is pointing: a wedge above the dot, rotated to the
+   reported bearing so the map reads like a phone map. */
+.driver-self-cone {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(37, 99, 235, 0.85),
+    rgba(37, 99, 235, 0.15)
+  );
+  clip-path: polygon(50% 2%, 78% 52%, 50% 40%, 22% 52%);
+  transform-origin: 50% 50%;
+  transition: transform 0.35s ease-out;
+  pointer-events: none;
+  /* No bearing yet: a parked vehicle is only a dot. */
+  opacity: 0;
+}
+
+.driver-self.has-heading .driver-self-cone {
+  opacity: 1;
 }
 
 .driver-self-dot {
