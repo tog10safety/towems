@@ -6,12 +6,16 @@ import { NOTIFICATION_EVENT } from "../utils/notifications.js";
 import Icon from "./Icon.jsx";
 import { Badge, Button } from "./ui.jsx";
 import { useApi } from "../hooks/useApi.js";
+import { readStored, writeStored } from "../map/config.js";
 
 // The pulse endpoint is three counts and, at most, five short rows, so a desk
 // can afford to ask often. Ten seconds is the difference between "the alert is
 // in the bell" and "we heard about the emergency while it was happening".
 const POLL_MS = 5_000;
 const HIDDEN_POLL_MS = 20_000;
+//: Whether this device has already been asked. Set before the prompt is shown,
+//: so a remount, a second sign-in or a refused prompt never asks again.
+const DESKTOP_ALERTS_ASKED = "toms.desktop-alerts.asked";
 
 /**
  * A short two-tone chime for an urgent alert. Browsers only allow sound after
@@ -53,9 +57,6 @@ export default function NotificationBell() {
   // Urgent items that arrived while this screen was open. They stay on screen
   // until somebody deals with them, because a desk may be looking elsewhere.
   const [alerts, setAlerts] = useState([]);
-  const [alertsAllowed, setAlertsAllowed] = useState(() =>
-    typeof Notification === "undefined" ? "unsupported" : Notification.permission
-  );
   const lastSeen = useRef(null);
   const summary = useApi("/notifications/summary/");
   // Show the latest notifications, not only actions: higher authorities
@@ -70,6 +71,24 @@ export default function NotificationBell() {
       (a, b) => Number(Boolean(b.is_pending_action)) - Number(Boolean(a.is_pending_action))
     )
     .slice(0, 12);
+
+  // Ask once, straight after sign-in. The desktop alert is what reaches an
+  // operator whose TOWEMS tab is buried behind another window, so it cannot be
+  // hidden behind a button nobody presses. The browser remembers the answer;
+  // this flag makes sure a refusal or a dismissal is not asked about again.
+  useEffect(() => {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission !== "default") return;
+    if (readStored(DESKTOP_ALERTS_ASKED, false) === true) return;
+    writeStored(DESKTOP_ALERTS_ASKED, true);
+    try {
+      const answer = Notification.requestPermission();
+      // Older Safari returns nothing; nothing to do then.
+      Promise.resolve(answer).catch(() => {});
+    } catch {
+      // A browser that refuses the request simply stays without OS alerts.
+    }
+  }, []);
 
   useEffect(() => {
     let timer = null;
@@ -180,15 +199,6 @@ export default function NotificationBell() {
     setAlerts((current) => current.filter((row) => row.id !== item.id));
   }
 
-  async function enableDesktopAlerts() {
-    if (typeof Notification === "undefined") return;
-    try {
-      setAlertsAllowed(await Notification.requestPermission());
-    } catch {
-      setAlertsAllowed("unsupported");
-    }
-  }
-
   async function openItem(item) {
     setOpen(false);
     if (!item.is_read) {
@@ -223,11 +233,6 @@ export default function NotificationBell() {
                   {item.message ? <p>{item.message}</p> : null}
                 </div>
                 <div className="bell-alert-actions">
-                  {alertsAllowed === "default" && (
-                    <Button size="sm" variant="ghost" onClick={enableDesktopAlerts}>
-                      Desktop alerts
-                    </Button>
-                  )}
                   <Button
                     size="sm"
                     onClick={() => {
@@ -327,11 +332,6 @@ export default function NotificationBell() {
               >
                 View all notifications
               </Button>
-              {alertsAllowed === "default" && (
-                <Button size="sm" variant="ghost" onClick={enableDesktopAlerts}>
-                  Enable desktop alerts
-                </Button>
-              )}
             </footer>
           </div>
         </>
