@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { divIcon } from "leaflet";
 import {
   CircleMarker,
   MapContainer,
+  Marker,
   Polyline,
   Popup,
   Tooltip,
@@ -34,8 +36,26 @@ import {
   writeStored,
 } from "../map/config.js";
 import { formatDateTime } from "../utils/format.js";
+import { headingCone, headingForPings } from "../map/vehicleHeading.js";
 
 const DEFAULT_CENTER = [12.8797, 121.774];
+
+/**
+ * A vehicle on the mission map, with the cone its pings point in.
+ *
+ * The colour keeps the meaning the circle had: gold for the convoy lead, red
+ * for the others. A vehicle whose phone has never carried a bearing shows the
+ * plain pin.
+ */
+function vehiclePin(run) {
+  return divIcon({
+    className: `mission-vehicle-pin${run.is_lead ? " is-lead" : ""}`,
+    html: `${headingCone(headingForPings(run.recent_pings))}<span></span>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -14],
+  });
+}
 
 /** Fit the view to everything this mission actually has on the map. */
 function FitTrack({ points, panelOpen }) {
@@ -383,17 +403,13 @@ export default function MissionTrackPage() {
             )}
 
             {liveRuns.map((run) => (
-              <CircleMarker
+              <Marker
                 key={`run-${run.id}`}
-                center={[run.last_latitude, run.last_longitude]}
-                radius={9}
-                pathOptions={{
-                  color: run.is_lead ? "#f0b429" : "#ff7b72",
-                  fillColor: run.is_lead ? "#f0b429" : "#ff7b72",
-                  fillOpacity: 0.9,
-                }}
+                position={[run.last_latitude, run.last_longitude]}
+                icon={vehiclePin(run)}
+                zIndexOffset={run.is_lead ? 600000 : 500000}
               >
-                <Tooltip permanent direction="top" offset={[0, -8]}>
+                <Tooltip permanent direction="top" offset={[0, -14]}>
                   {run.registration_number}
                   {run.is_lead ? " · Lead" : ""}
                 </Tooltip>
@@ -407,7 +423,7 @@ export default function MissionTrackPage() {
                   {formatDateTime(run.last_ping_at)}
                   {run.last_accuracy_m != null ? ` · ±${Math.round(run.last_accuracy_m)} m` : ""}
                 </Popup>
-              </CircleMarker>
+              </Marker>
             ))}
 
             {trips.map((trip) => {

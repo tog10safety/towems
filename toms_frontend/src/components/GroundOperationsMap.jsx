@@ -19,6 +19,7 @@ import {
 } from "../map/config.js";
 import { abortPhrase } from "../utils/abort.js";
 import { formatDateTime } from "../utils/format.js";
+import { headingCone, headingFromTrack } from "../map/vehicleHeading.js";
 
 /**
  * Live ground movement (Ground Operations).
@@ -42,9 +43,12 @@ function vehicleIcon(run) {
   if (run.is_live) classes.push(run.is_lead ? "is-lead" : "is-live");
   else classes.push("is-stale");
   if (run.delay?.status === "late") classes.push("is-late");
+  // The monitors see which way the vehicle is going, from the breadcrumbs the
+  // driver's phone has already reported.
+  const heading = headingFromTrack(run.trail);
   return divIcon({
     className: classes.join(" "),
-    html: "<span></span>",
+    html: `${headingCone(heading)}<span></span>`,
     iconSize: [26, 26],
     iconAnchor: [13, 13],
     popupAnchor: [0, -14],

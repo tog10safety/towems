@@ -16,6 +16,7 @@ import {
   resolveBasemap,
   writeStored,
 } from "../map/config.js";
+import { headingCone, nextHeading } from "../map/vehicleHeading.js";
 import { abortPhrase, abortShort } from "../utils/abort.js";
 import { formatDateTime } from "../utils/format.js";
 
@@ -114,40 +115,6 @@ function haversineKm(first, second) {
   return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-/** Compass bearing from one point to the next, clockwise from north. */
-function bearingDegrees(first, second) {
-  if (!Array.isArray(first) || !Array.isArray(second)) return null;
-  const toRad = (value) => (value * Math.PI) / 180;
-  const toDeg = (value) => (value * 180) / Math.PI;
-  const [lat1, lon1] = first;
-  const [lat2, lon2] = second;
-  const dLon = toRad(lon2 - lon1);
-  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
-  const x =
-    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
-    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
-  return (toDeg(Math.atan2(y, x)) + 360) % 360;
-}
-
-/**
- * Which way the vehicle is pointing.
- *
- * The phone reports a bearing only while it is moving; the course from the
- * previous fix fills the gap, and a parked vehicle keeps its last known
- * direction instead of losing its arrow between fixes.
- */
-function headingDegrees(previous, latitude, longitude, reported) {
-  if (Number.isFinite(reported)) return reported;
-  if (!previous || Number.isFinite(previous.latitude) === false) return null;
-  const moved = haversineKm(
-    [previous.latitude, previous.longitude],
-    [latitude, longitude]
-  );
-  // A few metres of GPS noise is not a turn: keep the arrow still.
-  if (moved == null || moved < 0.01) return previous.heading ?? null;
-  return bearingDegrees([previous.latitude, previous.longitude], [latitude, longitude]);
-}
-
 /**
  * The itinerary as it was recorded: origin, every stop, destination, in order.
  * Stop names are shown exactly as the plan stores them - the label must never
@@ -199,7 +166,7 @@ function stopPin(stop, isNext, isFinal, isSuperseded = false) {
  */
 const SELF_ICON = divIcon({
   className: "driver-self",
-  html: '<span class="driver-self-halo"></span><span class="driver-self-cone"></span><span class="driver-self-dot"></span>',
+  html: `<span class="driver-self-halo"></span>${headingCone(null)}<span class="driver-self-dot"></span>`,
   iconSize: [46, 46],
   iconAnchor: [23, 23],
 });
@@ -209,15 +176,15 @@ function DriverHeading({ heading }) {
   const map = useMap();
 
   useEffect(() => {
-    const marker = map.getContainer().querySelector(".driver-self");
-    const cone = marker?.querySelector(".driver-self-cone");
-    if (!marker || !cone) return;
-    if (Number.isFinite(heading)) {
-      marker.classList.add("has-heading");
-      cone.style.transform = `rotate(${Math.round(heading) % 360}deg)`;
-    } else {
-      marker.classList.remove("has-heading");
-    }
+    const cone = map
+      .getContainer()
+      .querySelector(".driver-self .vehicle-heading-cone");
+    if (!cone) return;
+    // The shared cone shows itself on this class. Turning it in place keeps the
+    // marker element - and its halo animation - alive between fixes.
+    const known = Number.isFinite(heading);
+    cone.classList.toggle("is-known", known);
+    if (known) cone.style.transform = `rotate(${Math.round(heading) % 360}deg)`;
   }, [map, heading]);
 
   return null;
@@ -729,7 +696,7 @@ export default function DriverTrackingPage() {
           latitude,
           longitude,
           accuracy,
-          heading: headingDegrees(previous, latitude, longitude, heading),
+          heading: nextHeading(previous, latitude, longitude, heading),
         }));
         setGpsState("live");
         if (queue.current.length >= 4) flush();

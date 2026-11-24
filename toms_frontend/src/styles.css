@@ -4111,12 +4111,57 @@ body.map-fullscreen-open {
 /* Live ground movement: a vehicle is a dot with its plate beside it, a mission
    is the count of vehicles currently reporting to it. */
 .ground-vehicle-pin {
+  --vehicle-cone: #a371f7;
   display: grid;
   place-items: center;
   border-radius: 50%;
   border: 2px solid #ffffff;
   background: #a371f7;
   box-shadow: 0 3px 10px rgba(15, 23, 42, 0.35);
+}
+
+/* The heading wedge the Operations Center's maps share: the same cone the
+   driver's own marker draws, sized to reach out past a small vehicle pin. The
+   pin supplies the colour, so a late or lead vehicle keeps its meaning.
+   Without a bearing the wedge stays hidden and the pin is a plain dot. */
+.vehicle-heading-cone {
+  position: absolute;
+  /* Sized by the marker: a small vehicle pin needs the wedge to reach past it,
+     the driver's larger marker keeps it inside its own box. */
+  inset: var(--vehicle-cone-inset, -12px);
+  background: var(--vehicle-cone, #2563eb);
+  clip-path: polygon(50% 2%, 78% 52%, 50% 40%, 22% 52%);
+  transform-origin: 50% 50%;
+  transition: transform 0.35s ease-out;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vehicle-heading-cone.is-known {
+  opacity: var(--vehicle-cone-opacity, 0.45);
+}
+
+/* A vehicle on the mission map, in the colours its circle marker used. */
+.mission-vehicle-pin {
+  --vehicle-cone: #ff7b72;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  background: #ff7b72;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.35);
+}
+
+.mission-vehicle-pin span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.mission-vehicle-pin.is-lead {
+  --vehicle-cone: #f0b429;
+  background: #f0b429;
 }
 
 .ground-vehicle-pin span {
@@ -4128,16 +4173,19 @@ body.map-fullscreen-open {
 
 .ground-vehicle-pin.is-lead {
   background: #f0b429;
+  --vehicle-cone: #f0b429;
 }
 
 .ground-vehicle-pin.is-stale {
   background: #8b949e;
+  --vehicle-cone: #8b949e;
   opacity: 0.75;
 }
 
 /* Declared last so lateness wins over the live/lead/stale colours. */
 .ground-vehicle-pin.is-late {
   background: #f85149;
+  --vehicle-cone: #f85149;
   box-shadow:
     0 0 0 3px rgba(248, 81, 73, 0.35),
     0 3px 10px rgba(15, 23, 42, 0.35);
@@ -4988,28 +5036,10 @@ body.map-fullscreen-open {
 
 .driver-self {
   position: relative;
-}
-
-/* Which way the vehicle is pointing: a wedge above the dot, rotated to the
-   reported bearing so the map reads like a phone map. */
-.driver-self-cone {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    180deg,
-    rgba(37, 99, 235, 0.85),
-    rgba(37, 99, 235, 0.15)
-  );
-  clip-path: polygon(50% 2%, 78% 52%, 50% 40%, 22% 52%);
-  transform-origin: 50% 50%;
-  transition: transform 0.35s ease-out;
-  pointer-events: none;
-  /* No bearing yet: a parked vehicle is only a dot. */
-  opacity: 0;
-}
-
-.driver-self.has-heading .driver-self-cone {
-  opacity: 1;
+  /* The shared heading cone, sized to this marker's 46 px box. */
+  --vehicle-cone: #2563eb;
+  --vehicle-cone-inset: 0;
+  --vehicle-cone-opacity: 0.8;
 }
 
 .driver-self-dot {
