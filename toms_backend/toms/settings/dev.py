@@ -4,14 +4,17 @@ Local-only conveniences. Never import this module in a deployed environment.
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .base import *  # noqa: F401,F403
-from .base import BASE_DIR, SECRET_KEY, env_bool, env_list, parse_database_url
+# Load .env from the backend directory BEFORE base is imported, otherwise
+# DATABASE_URL and DJANGO_SECRET_KEY are read while the environment is still
+# empty and base leaves DATABASES = {} (Django's dummy backend).
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
-# Load .env from the backend directory if present (development only).
-load_dotenv(BASE_DIR / ".env")
+from .base import *  # noqa: E402,F401,F403
+from .base import BASE_DIR, SECRET_KEY, env_bool, env_list, parse_database_url  # noqa: E402
 
 DEBUG = env_bool("DJANGO_DEBUG", True)
 
