@@ -21,7 +21,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts import mfa, ownership, setup_gate, unit_changes
+from apps.accounts import device_sessions, mfa, ownership, setup_gate, unit_changes
 from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, UnitChangeRequest, User
 from apps.accounts.models import PasswordResetToken
 from apps.accounts.serializers import (
@@ -185,6 +185,20 @@ def _complete_login(
     """
     login(request, user)
     session = request.session
+    # A Creator account may hold one session at a time. The check is made after
+    # ``login`` so the key of *this* session is excluded from the comparison, and
+    # the session is flushed again if another device already holds one.
+    conflict = device_sessions.register_login(
+        user,
+        request,
+        session.session_key,
+        verified=verified,
+        enrollment_required=enrollment_required,
+    )
+    if conflict is not None:
+        session.flush()
+        raise device_sessions.DeviceConflict(conflict)
+
     session["mfa_verified"] = verified
     if enrollment_required:
         session["mfa_enrollment_required"] = True
@@ -401,8 +415,72 @@ class LogoutView(APIView):
             description=f"{user.username} signed out",
             request=request,
         )
+        # Capture the key first: ``logout`` flushes the session it belongs to.
+        session_key = request.session.session_key
         logout(request)
+        device_sessions.forget(session_key)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class DeviceSwitchView(APIView):
+    """End the session on the other device and continue signing in here.
+
+    Reached from the dialog the SPA shows when a single-device account is already
+    signed in elsewhere. The token is the one returned with the 409, so it can
+    only be used after the password (and authenticator, when enrolled) has been
+    verified, and only for a few minutes.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    throttle_scope = "login"
+
+    def post(self, request):
+        enforce_csrf(request)
+        state = device_sessions.read_conflict(request.data.get("challenge") or "")
+        if state is None:
+            return Response(
+                {
+                    "detail": "This confirmation has expired. Sign in again.",
+                    "errors": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user, verified, enrollment_required = state
+        device_sessions.end_others(user)
+        log_action(
+            actor=user,
+            action="device_switch",
+            entity_type="auth",
+            entity_id=user.id,
+            note="Signed out the other device to continue here",
+            request=request,
+        )
+        return Response(
+            _complete_login(
+                request,
+                user,
+                verified=verified,
+                enrollment_required=enrollment_required,
+            )
+        )
+
+
+class DeviceSessionListView(APIView):
+    """The devices this account is signed in on (the self-service view)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        key = request.session.session_key
+        current = []
+        others = device_sessions.other_devices(request.user)
+        payload = {
+            "single_device": device_sessions.requires_single_device(request.user),
+            "current": key[:8] if key else "",
+            "devices": others,
+        }
+        return Response(payload)
 
 
 class SetupAwareTokenObtainPairSerializer(TokenObtainPairSerializer):

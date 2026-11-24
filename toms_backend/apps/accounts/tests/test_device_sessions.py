@@ -1,0 +1,127 @@
+"""One device at a time, for Creator accounts.
+
+A Creator may hold a single session. A second sign-in is refused with the
+device already signed in, and the person can confirm that the other session
+may end and continue on the new device. Every other role keeps multi-device
+access, which the Operations Center and Command posts need.
+"""
+
+from __future__ import annotations
+
+import pytest
+from django.conf import settings
+from rest_framework.test import APIClient
+
+from apps.accounts.models import DeviceSession
+from apps.core.factories import PASSWORD
+
+pytestmark = pytest.mark.django_db
+
+
+def _client() -> APIClient:
+    return APIClient()
+
+
+def _sign_in(client, user, password=PASSWORD):
+    client.get("/api/auth/csrf/")
+    token = client.cookies[settings.CSRF_COOKIE_NAME].value
+    return client.post(
+        "/api/auth/login/",
+        {"username": user.username, "password": password},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+
+
+def _switch_device(client, challenge):
+    token = client.cookies[settings.CSRF_COOKIE_NAME].value
+    return client.post(
+        "/api/auth/login/switch-device/",
+        {"challenge": challenge},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+
+
+def test_a_creator_cannot_sign_in_on_a_second_device(creator):
+    first = _client()
+    assert _sign_in(first, creator).status_code == 200
+
+    second = _client()
+    response = _sign_in(second, creator)
+
+    assert response.status_code == 409
+    body = response.json()
+    # The API's error envelope keeps the extra fields under "errors".
+    assert body["errors"]["code"] == "device_in_use"
+    assert body["errors"]["challenge"]
+    assert body["errors"]["device"]["label"]
+    assert "Only one device" in body["detail"]
+    # The device that was already signed in keeps its session.
+    assert first.get("/api/auth/me/").status_code == 200
+    # The refused attempt leaves no session behind on the second device.
+    assert second.get("/api/auth/me/").status_code in (401, 403)
+
+
+def test_confirming_the_device_switch_ends_the_other_session(creator):
+    first = _client()
+    assert _sign_in(first, creator).status_code == 200
+
+    second = _client()
+    conflict = _sign_in(second, creator).json()["errors"]
+
+    response = _switch_device(second, conflict["challenge"])
+    assert response.status_code == 200, response.content
+    assert response.json()["username"] == creator.username
+
+    # The new device is signed in; the old one is not.
+    assert second.get("/api/auth/me/").status_code == 200
+    assert first.get("/api/auth/me/").status_code in (401, 403)
+
+
+def test_a_used_or_stale_challenge_cannot_be_replayed(creator):
+    first = _client()
+    assert _sign_in(first, creator).status_code == 200
+    second = _client()
+    conflict = _sign_in(second, creator).json()["errors"]
+
+    assert _switch_device(second, conflict["challenge"]).status_code == 200
+    # The same token cannot be used to disturb the session it just created.
+    third = _client()
+    third.get("/api/auth/csrf/")
+    assert _switch_device(third, "not-a-token").status_code == 400
+
+
+def test_signing_out_frees_the_creator_device(creator):
+    first = _client()
+    assert _sign_in(first, creator).status_code == 200
+    token = first.cookies[settings.CSRF_COOKIE_NAME].value
+    assert (
+        first.post("/api/auth/logout/", {}, format="json", HTTP_X_CSRFTOKEN=token).status_code
+        == 204
+    )
+    assert DeviceSession.objects.filter(user=creator).count() == 0
+
+    second = _client()
+    assert _sign_in(second, creator).status_code == 200
+
+
+def test_an_administrator_can_stay_signed_in_on_two_devices(admin):
+    first = _client()
+    assert _sign_in(first, admin).status_code == 200
+
+    second = _client()
+    response = _sign_in(second, admin)
+    assert response.status_code == 200, response.content
+
+    assert first.get("/api/auth/me/").status_code == 200
+    assert second.get("/api/auth/me/").status_code == 200
+
+
+def test_the_device_record_names_the_browser(creator):
+    client = _client()
+    assert _sign_in(client, creator).status_code == 200
+
+    row = DeviceSession.objects.get(user=creator)
+    assert row.device_label
+    assert row.session_key == client.session.session_key

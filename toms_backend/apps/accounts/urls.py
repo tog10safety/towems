@@ -26,6 +26,17 @@ urlpatterns = [
         views.MFAChallengeView.as_view(),
         name="auth-mfa-challenge",
     ),
+    # A single-device account confirms here that the other session may end.
+    path(
+        "auth/login/switch-device/",
+        views.DeviceSwitchView.as_view(),
+        name="auth-login-switch-device",
+    ),
+    path(
+        "auth/devices/",
+        views.DeviceSessionListView.as_view(),
+        name="auth-devices",
+    ),
     path("auth/logout/", views.LogoutView.as_view(), name="auth-logout"),
     path("auth/me/", views.MeView.as_view(), name="auth-me"),
     path("auth/password/", views.ChangePasswordView.as_view(), name="auth-password"),

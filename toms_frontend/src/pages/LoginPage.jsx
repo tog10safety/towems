@@ -6,7 +6,7 @@ import { Button, ErrorBanner, Field, Input } from "../components/ui.jsx";
 import { useTheme } from "../theme/ThemeContext.jsx";
 
 export default function LoginPage() {
-  const { user, login, verifyMfa } = useAuth();
+  const { user, login, verifyMfa, switchDevice } = useAuth();
   const { resolvedTheme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
@@ -17,10 +17,30 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Set when a single-device account is already signed in elsewhere.
+  const [conflict, setConflict] = useState(null);
 
   if (user) return <Navigate to={location.state?.from || "/"} replace />;
 
   const destination = location.state?.from || "/";
+
+  /**
+   * Show the device dialog when the server refused a second sign-in, and any
+   * other failure as the usual banner. Returns true when it was handled here.
+   */
+  function handleAuthError(err, fallback = "Sign-in failed.") {
+    // The API wraps every error as {detail, errors}; the device payload is the
+    // normalised error body.
+    const payload = err?.payload?.errors ?? err?.payload;
+    if (payload?.code === "device_in_use") {
+      setConflict(payload);
+      setChallenge(null);
+      setError("");
+      return true;
+    }
+    setError(err.message || fallback);
+    return false;
+  }
 
   async function onSubmit(event) {
     event.preventDefault();
@@ -40,7 +60,7 @@ export default function LoginPage() {
       }
       navigate(destination, { replace: true });
     } catch (err) {
-      setError(err.message || "Sign-in failed.");
+      handleAuthError(err);
     } finally {
       setBusy(false);
     }
@@ -54,7 +74,26 @@ export default function LoginPage() {
       await verifyMfa(challenge.challenge, code.trim(), recoveryMode);
       navigate(destination, { replace: true });
     } catch (err) {
-      setError(err.message || "Verification failed.");
+      handleAuthError(err, "Verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSwitchDevice() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await switchDevice(conflict.challenge);
+      setConflict(null);
+      if (result?.mfa_setup_required) {
+        navigate("/mfa-setup", { replace: true });
+        return;
+      }
+      navigate(destination, { replace: true });
+    } catch (err) {
+      setConflict(null);
+      handleAuthError(err);
     } finally {
       setBusy(false);
     }
@@ -95,7 +134,11 @@ export default function LoginPage() {
 
         <section className="login-form-panel">
           <h2 className="login-heading">
-            {challenge ? "Two-factor verification" : "Sign in"}
+            {conflict
+              ? "Already signed in"
+              : challenge
+                ? "Two-factor verification"
+                : "Sign in"}
           </h2>
           <p className="login-copy">
             {challenge
@@ -105,7 +148,36 @@ export default function LoginPage() {
 
           <ErrorBanner message={error} />
 
-          {challenge ? (
+          {conflict ? (
+            <div className="login-conflict" role="alertdialog" aria-labelledby="device-conflict-title">
+              <h3 id="device-conflict-title">This account is open on another device</h3>
+              <p>{conflict.detail}</p>
+              <p className="login-footnote">
+                {conflict.device?.label ? `${conflict.device.label}` : "Another device"}
+                {conflict.device?.since
+                  ? ` · signed in ${new Date(conflict.device.since).toLocaleString()}`
+                  : ""}
+              </p>
+              <p className="login-footnote">
+                Continuing signs that device out immediately. Ask the person using it to save
+                their work first.
+              </p>
+              <div className="btn-row" style={{ marginTop: 12 }}>
+                <Button type="button" onClick={onSwitchDevice} disabled={busy}>
+                  {busy ? "Switching…" : "Sign out that device and continue"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConflict(null)}
+                  disabled={busy}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : challenge ? (
             <>
               <form onSubmit={onVerify} className="login-form">
                 <Field

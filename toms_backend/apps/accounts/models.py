@@ -500,3 +500,38 @@ class UnitChangeRequest(models.Model):
 
     def __str__(self) -> str:
         return f"Unit change {self.pk} ({self.status})"
+
+
+class DeviceSession(models.Model):
+    """One signed-in browser session, with the device it came from.
+
+    Django's own ``django_session`` table stays the source of truth for whether
+    a session is alive; this row only maps a session key to the account, the
+    device label and the last activity, so "is this person already signed in
+    somewhere else?" is one small query instead of a scan of every session
+    payload. A row whose session has expired is ignored and deleted.
+    """
+
+    user = models.ForeignKey(
+        "accounts.User",
+        db_column="user_id",
+        on_delete=models.CASCADE,
+        db_constraint=False,
+        related_name="device_sessions",
+    )
+    session_key = models.CharField(max_length=64, unique=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=255, blank=True, default="")
+    device_label = models.CharField(max_length=80, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounts_device_session"
+        ordering = ["-last_seen_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "last_seen_at"], name="acct_device_user_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} on {self.device_label or 'a device'}"

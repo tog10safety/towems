@@ -56,6 +56,15 @@ export function AuthProvider({ children }) {
     return me;
   }, []);
 
+  // A single-device account already signed in elsewhere: the person confirmed
+  // that the other session may end, and this becomes the one active device.
+  const switchDevice = useCallback(async (challenge) => {
+    const me = await api.post("/auth/login/switch-device/", { challenge });
+    setUser(me);
+    setError("");
+    return me;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.post("/auth/logout/", {});
@@ -73,11 +82,12 @@ export function AuthProvider({ children }) {
       login,
       verifyMfa,
       verifyMfaSetup,
+      switchDevice,
       logout,
       refresh,
       permissions: user?.permissions ?? {},
     }),
-    [user, loading, error, login, verifyMfa, verifyMfaSetup, logout, refresh]
+    [user, loading, error, login, verifyMfa, verifyMfaSetup, switchDevice, logout, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
