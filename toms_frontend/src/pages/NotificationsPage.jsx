@@ -46,6 +46,8 @@ export default function NotificationsPage() {
   }
 
   async function markRead(item) {
+    // Opening the same item twice must not fire a second write.
+    if (item.is_read) return;
     setError("");
     try {
       await api.post(`/notifications/${item.id}/mark-read/`);
@@ -142,7 +144,21 @@ export default function NotificationsPage() {
           <ul className="notification-list">
             {data.results.map((item) => (
               <li key={item.id} className={`notification ${item.is_read ? "" : "unread"}`}>
-                <div className="notification-main">
+                {/* Opening a notice reads it. The action itself stays open. */}
+                <div
+                  className={`notification-main${item.is_read ? "" : " is-unread"}`}
+                  role={item.is_read ? undefined : "button"}
+                  tabIndex={item.is_read ? undefined : 0}
+                  title={item.is_read ? undefined : "Mark this notification read"}
+                  onClick={() => markRead(item)}
+                  onKeyDown={(event) => {
+                    if (item.is_read) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      markRead(item);
+                    }
+                  }}
+                >
                   <div className="notification-title">
                     <strong>{item.title}</strong>
                     {!item.is_read && <Badge tone="info">New</Badge>}
@@ -183,7 +199,11 @@ export default function NotificationsPage() {
 
                 <div className="notification-actions">
                   {item.action_url && (
-                    <Link className="btn btn-ghost btn-sm" to={item.action_url}>
+                    <Link
+                      className="btn btn-ghost btn-sm"
+                      to={item.action_url}
+                      onClick={() => markRead(item)}
+                    >
                       {item.action_status === "completed"
                         ? "Open record"
                         : item.action_label || "Open record"}

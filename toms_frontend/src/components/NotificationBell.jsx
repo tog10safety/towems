@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { NOTIFICATION_EVENT } from "../utils/notifications.js";
@@ -6,7 +7,38 @@ import Icon from "./Icon.jsx";
 import { Badge, Button } from "./ui.jsx";
 import { useApi } from "../hooks/useApi.js";
 
-const REFRESH_MS = 60_000;
+// The pulse endpoint is three counts and, at most, five short rows, so a desk
+// can afford to ask often. Ten seconds is the difference between "the alert is
+// in the bell" and "we heard about the emergency while it was happening".
+const POLL_MS = 5_000;
+const HIDDEN_POLL_MS = 20_000;
+
+/**
+ * A short two-tone chime for an urgent alert. Browsers only allow sound after
+ * the user has interacted with the page; every control on a console is a
+ * click, and a browser that refuses simply stays silent.
+ */
+function chime() {
+  try {
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) return;
+    const context = new Audio();
+    const gain = context.createGain();
+    gain.gain.value = 0.08;
+    gain.connect(context.destination);
+    [880, 660].forEach((frequency, index) => {
+      const tone = context.createOscillator();
+      tone.type = "sine";
+      tone.frequency.value = frequency;
+      tone.connect(gain);
+      tone.start(context.currentTime + index * 0.22);
+      tone.stop(context.currentTime + index * 0.22 + 0.18);
+    });
+    window.setTimeout(() => context.close?.(), 1500);
+  } catch {
+    // No audio is not a failed alert: the card and the bell still report it.
+  }
+}
 
 /**
  * Notification bell (spec §4).
@@ -18,48 +50,118 @@ const REFRESH_MS = 60_000;
 export default function NotificationBell() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  // Urgent items that arrived while this screen was open. They stay on screen
+  // until somebody deals with them, because a desk may be looking elsewhere.
+  const [alerts, setAlerts] = useState([]);
+  const [alertsAllowed, setAlertsAllowed] = useState(() =>
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission
+  );
+  const lastSeen = useRef(null);
   const summary = useApi("/notifications/summary/");
   // Show the latest notifications, not only actions: higher authorities
   // receive informational routing notices that must still be visible here.
-  const notifications = useApi("/notifications/?page_size=12");
-  // Pending actions come first: the panel is a work list, not a feed.
-  const items = [...(notifications.data?.results ?? [])].sort(
-    (a, b) => Number(Boolean(b.is_pending_action)) - Number(Boolean(a.is_pending_action))
-  );
+  const notifications = useApi("/notifications/?page_size=30");
+  // The panel is a work list, not a feed: an action stays until the work is
+  // done, while a notice that has been read has no reason to sit here any
+  // longer - it remains on the Notifications page.
+  const items = [...(notifications.data?.results ?? [])]
+    .filter((item) => !item.is_read || item.is_pending_action)
+    .sort(
+      (a, b) => Number(Boolean(b.is_pending_action)) - Number(Boolean(a.is_pending_action))
+    )
+    .slice(0, 12);
 
   useEffect(() => {
     let timer = null;
+    let stopped = false;
+
     const reload = () => {
       summary.reload();
       notifications.reload();
     };
 
-    function startPolling() {
-      if (timer !== null) return;
-      timer = window.setInterval(reload, REFRESH_MS);
+    function announce(rows) {
+      setAlerts((current) => {
+        const known = new Set(current.map((row) => row.id));
+        const fresh = rows.filter((row) => !known.has(row.id));
+        return [...fresh.reverse(), ...current].slice(0, 3);
+      });
+      if (rows.some((row) => row.priority === "urgent")) chime();
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+        return;
+      }
+      rows.forEach((row) => {
+        try {
+          const note = new Notification(row.title, {
+            body: row.message || "",
+            tag: `towems-notification-${row.id}`,
+            requireInteraction: row.priority === "urgent",
+          });
+          note.onclick = () => {
+            window.focus();
+            navigate(row.action_url || "/notifications");
+            note.close();
+          };
+        } catch {
+          // Phones only allow notifications from a service worker. The in-app
+          // alert above is always shown, so the message is never lost.
+        }
+      });
     }
 
-    function stopPolling() {
-      if (timer === null) return;
-      window.clearInterval(timer);
-      timer = null;
+    async function check() {
+      // 0 is a real mark ("this inbox was empty"), so presence is tested with
+      // null, not truthiness. An inbox that started empty must still refresh
+      // when its first notification lands.
+      const marked = lastSeen.current !== null;
+      let body;
+      try {
+        body = await api.get(
+          marked
+            ? `/notifications/pulse/?since=${lastSeen.current}`
+            : "/notifications/pulse/"
+        );
+      } catch {
+        // A dropped poll is retried by the next tick; the link is lossy.
+        return;
+      }
+      if (stopped || !body) return;
+      const latest = Number(body.latest_id) || 0;
+      const changed = marked && latest !== lastSeen.current;
+      lastSeen.current = latest;
+      if (changed || body.urgent?.length) reload();
+      if (body.urgent?.length) announce(body.urgent);
+    }
+
+    function schedule(delay) {
+      if (stopped) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        await check();
+        schedule(
+          document.visibilityState === "visible" ? POLL_MS : HIDDEN_POLL_MS
+        );
+      }, delay);
     }
 
     function onVisibilityChange() {
       if (document.visibilityState === "visible") {
-        reload();
-        startPolling();
+        check();
+        schedule(POLL_MS);
       } else {
-        stopPolling();
+        // Keep a slow watch: a background tab still has to hear an emergency.
+        schedule(HIDDEN_POLL_MS);
       }
     }
 
     // Pages that finish an action tell the bell to refresh straight away.
     window.addEventListener(NOTIFICATION_EVENT, reload);
     document.addEventListener("visibilitychange", onVisibilityChange);
-    if (document.visibilityState === "visible") startPolling();
+    check();
+    schedule(document.visibilityState === "visible" ? POLL_MS : HIDDEN_POLL_MS);
     return () => {
-      stopPolling();
+      stopped = true;
+      window.clearTimeout(timer);
       window.removeEventListener(NOTIFICATION_EVENT, reload);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
@@ -69,6 +171,23 @@ export default function NotificationBell() {
 
   const pending = summary.data?.pending_actions ?? 0;
   const unread = summary.data?.unread ?? 0;
+  // The badge counts what is waiting for this account. Pending work wins when
+  // it exists, but an unread emergency is a number too - a bare blue dot hides
+  // how much is sitting in the inbox.
+  const badge = Math.max(pending, unread);
+
+  function dismiss(item) {
+    setAlerts((current) => current.filter((row) => row.id !== item.id));
+  }
+
+  async function enableDesktopAlerts() {
+    if (typeof Notification === "undefined") return;
+    try {
+      setAlertsAllowed(await Notification.requestPermission());
+    } catch {
+      setAlertsAllowed("unsupported");
+    }
+  }
 
   async function openItem(item) {
     setOpen(false);
@@ -86,17 +205,59 @@ export default function NotificationBell() {
 
   return (
     <div className="bell-wrap">
+      {/* A portal, not a child of the top bar: the bar's backdrop-filter makes
+          it the containing block for fixed children, which put the alert in
+          the header instead of at the foot of the screen. */}
+      {alerts.length > 0 &&
+        createPortal(
+          <div className="bell-alerts" role="alert" aria-live="assertive">
+            {alerts.map((item) => (
+              <div
+                key={item.id}
+                className={`bell-alert${
+                  item.priority === "urgent" ? " is-urgent" : ""
+                }`}
+              >
+                <div className="bell-alert-copy">
+                  <strong>{item.title}</strong>
+                  {item.message ? <p>{item.message}</p> : null}
+                </div>
+                <div className="bell-alert-actions">
+                  {alertsAllowed === "default" && (
+                    <Button size="sm" variant="ghost" onClick={enableDesktopAlerts}>
+                      Desktop alerts
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      dismiss(item);
+                      openItem(item);
+                    }}
+                  >
+                    Open
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => dismiss(item)}>
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>,
+          document.body
+        )}
+
       <button
         className="icon-btn bell-btn"
         onClick={() => setOpen((value) => !value)}
-        aria-label={`Notifications: ${pending} pending action${pending === 1 ? "" : "s"}`}
+        aria-label={`Notifications: ${unread} unread, ${pending} pending action${
+          pending === 1 ? "" : "s"
+        }`}
         aria-expanded={open}
       >
         <Icon name="bell" size={19} />
-        {pending > 0 ? (
-          <span className="bell-count">{pending > 99 ? "99+" : pending}</span>
-        ) : (
-          unread > 0 && <span className="bell-dot" aria-hidden="true" />
+        {badge > 0 && (
+          <span className="bell-count">{badge > 99 ? "99+" : badge}</span>
         )}
       </button>
 
@@ -120,7 +281,9 @@ export default function NotificationBell() {
                 {items.map((item) => (
                   <li key={item.id}>
                     <button
-                      className={`bell-item${item.is_pending_action ? " is-action" : ""}`}
+                      className={`bell-item${item.is_pending_action ? " is-action" : ""}${
+                        item.is_read ? "" : " is-unread"
+                      }`}
                       onClick={() => openItem(item)}
                     >
                       <span className="bell-item-head">
@@ -149,7 +312,7 @@ export default function NotificationBell() {
               </ul>
             ) : (
               <p className="hint" style={{ padding: 12 }}>
-                No notifications.
+                Nothing waiting. Read notices stay on the Notifications page.
               </p>
             )}
 
@@ -164,6 +327,11 @@ export default function NotificationBell() {
               >
                 View all notifications
               </Button>
+              {alertsAllowed === "default" && (
+                <Button size="sm" variant="ghost" onClick={enableDesktopAlerts}>
+                  Enable desktop alerts
+                </Button>
+              )}
             </footer>
           </div>
         </>

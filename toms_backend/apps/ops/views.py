@@ -7549,6 +7549,72 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             }
         )
 
+    @action(detail=False, methods=["get"])
+    def pulse(self, request):
+        """A cheap "is anything new?" check the bell asks while a screen is open.
+
+        Re-reading the inbox every few seconds is wasteful, so the bell asks for
+        three numbers and - only when it says which id it saw last - the new
+        urgent items themselves. Those are what a desk must be told about
+        without waiting for somebody to click the bell. An emergency alert is
+        one of them, so it arrives within one poll interval.
+        """
+        base = Notification.objects.filter(recipient_id=request.user.id)
+        latest_id = base.order_by("-id").values_list("id", flat=True).first() or 0
+        try:
+            since = int(request.query_params.get("since") or 0)
+        except (TypeError, ValueError):
+            since = 0
+
+        urgent = []
+        if since:
+            rows = (
+                base.filter(id__gt=since, priority__in=["urgent", "high"])
+                .exclude(is_read=True)
+                .order_by("id")[:5]
+            )
+        else:
+            # A console that opens after the alarm still has to hear it. An
+            # unread emergency from the last quarter of an hour is repeated; a
+            # merely high-priority item is not, so re-entry does not nag.
+            from datetime import timedelta
+
+            from django.utils import timezone
+
+            rows = base.filter(
+                priority="urgent",
+                is_read=False,
+                created_at__gte=timezone.now() - timedelta(minutes=15),
+            ).order_by("id")[:5]
+        if rows:
+            urgent = [
+                {
+                    "id": row.id,
+                    "title": row.title,
+                    "message": row.message,
+                    "level": row.level,
+                    "priority": row.priority,
+                    "action_url": row.action_url,
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]
+
+        return Response(
+            {
+                "latest_id": latest_id,
+                "unread": base.filter(is_read=False).count(),
+                "pending_actions": base.filter(
+                    requires_action=True,
+                    action_status__in=[
+                        Notification.ACTION_OPEN,
+                        Notification.ACTION_IN_PROGRESS,
+                    ],
+                ).count(),
+                "urgent": urgent,
+            }
+        )
+
     @action(detail=True, methods=["post"], url_path="mark-read")
     def mark_read(self, request, pk=None):
         notification = self.get_object()

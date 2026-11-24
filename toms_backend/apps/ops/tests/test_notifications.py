@@ -32,6 +32,51 @@ def action_notification(user, **overrides):
     return notify(user, related=related, **data)
 
 
+def test_the_pulse_announces_a_new_urgent_item_once(as_user, creator):
+    first = action_notification(creator, title="Old news")
+    client = as_user(creator)
+
+    # The first call only sets the mark: nothing already in the inbox is
+    # announced as if it had just arrived.
+    opening = client.get("/api/notifications/pulse/").json()
+    assert opening["latest_id"] == first.id
+    assert opening["urgent"] == []
+
+    urgent = action_notification(
+        creator, title="EMERGENCY: KM450-1234567", level="danger", priority="urgent"
+    )
+    body = client.get(f"/api/notifications/pulse/?since={first.id}").json()
+
+    assert body["latest_id"] == urgent.id
+    assert [row["id"] for row in body["urgent"]] == [urgent.id]
+    assert body["urgent"][0]["title"] == "EMERGENCY: KM450-1234567"
+    assert body["unread"] == 2
+
+
+def test_the_pulse_repeats_an_unread_emergency_on_a_fresh_page(as_user, creator):
+    """A console that opens after the alarm still has to hear it."""
+    urgent = action_notification(
+        creator, title="EMERGENCY: KM450-1234567", level="danger", priority="urgent"
+    )
+    quiet = action_notification(creator, title="Routine", priority="high")
+
+    body = as_user(creator).get("/api/notifications/pulse/").json()
+
+    assert [row["id"] for row in body["urgent"]] == [urgent.id]
+    assert quiet.id not in {row["id"] for row in body["urgent"]}
+
+
+def test_the_pulse_stays_quiet_about_items_already_read(as_user, creator):
+    first = action_notification(creator)
+    item = action_notification(creator, priority="urgent")
+    as_user(creator).post(f"/api/notifications/{item.id}/mark-read/")
+
+    body = as_user(creator).get(f"/api/notifications/pulse/?since={first.id}").json()
+
+    assert body["latest_id"] == item.id
+    assert body["urgent"] == []
+
+
 def test_reading_an_action_does_not_complete_it(as_user, creator):
     item = action_notification(creator)
     client = as_user(creator)
