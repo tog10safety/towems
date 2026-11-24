@@ -155,6 +155,16 @@ COMMANDER_TITLES = {
     "Squadron": "SQUADRON COMMANDER",
 }
 
+#: The same posts as they are written under a signature. A commander is titled
+#: by the level of the unit the order is issued for, never by a free-text field.
+COMMANDER_DESIGNATIONS = {
+    "Command": "Commander",
+    "Wing": "Wing Commander",
+    "Group": "Group Commander",
+    "Center": "Center Commander",
+    "Squadron": "Squadron Commander",
+}
+
 
 def _text(value) -> str:
     # Legacy rows can contain U+FFFD where a name was imported with a bad
@@ -268,16 +278,60 @@ def _signer_for(mission):
     )
 
 
-def _signer_designation(mission, signer):
+def _signing_as_commander(mission, signer) -> bool:
+    """Whether the signer signs in their own right as the unit's commander.
+
+    That is the commander's post at the unit the order is issued for, or the
+    commander the mission names as its approving authority when no appointment
+    row was ever entered. Holding command at a *higher* headquarters is not the
+    same thing: a wing commander signing a group's order still signs it for the
+    group commander.
+    """
+    if signer is None or mission.unit_id is None:
+        return False
+
+    from apps.command.models import UnitAppointment
+    from apps.core.roles import ROLE_COMMANDER
+    from apps.ops.models import Mission
+
+    if UnitAppointment.objects.filter(
+        is_active=True,
+        role=ROLE_COMMANDER,
+        unit_id=mission.unit_id,
+        user_id=getattr(signer, "pk", None),
+    ).exists():
+        return True
+    return bool(
+        mission.approving_authority_id == getattr(signer, "pk", None)
+        and mission.approving_authority_role == Mission.AUTHORITY_COMMANDER
+        and getattr(signer, "unit_id", None) == mission.unit_id
+    )
+
+
+def _commander_designation(unit) -> str:
+    """The commander's designation at the level of ``unit``."""
+    return COMMANDER_DESIGNATIONS.get(getattr(unit, "category", ""), "Commander")
+
+
+def _signer_designation(mission, signer, *, as_commander=None):
     """Return the post shown under the signer's rank.
+
+    A commander signs in their own right, so the designation is the post of
+    their level - Commander, Wing Commander, Group Commander, Squadron
+    Commander. Anybody else keeps the mission's authority role when they are
+    that authority (a deputy signing "for" the commander), and their own
+    profile designation otherwise.
 
     The designated signatory can be the approving authority stored as a
     separate model instance, so compare primary keys rather than object
-    identity. When it is that authority, the mission's authority role is the
-    correct designation; otherwise keep the signer's own profile designation.
+    identity.
     """
     if signer is None:
         return ""
+    if as_commander is None:
+        as_commander = _signing_as_commander(mission, signer)
+    if as_commander:
+        return _commander_designation(mission.unit)
     if getattr(signer, "pk", None) == mission.approving_authority_id:
         role = mission.get_approving_authority_role_display()
         if role:
@@ -866,6 +920,8 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
     purpose = (mission.purpose or mission.title or "").strip() or "Not specified."
     signer = _signer_for(mission)
     commander_title = COMMANDER_TITLES.get(unit.category, "COMMANDER")
+    # A commander signs in their own right; the order is not signed "for" them.
+    signing_as_commander = _signing_as_commander(mission, signer)
     issued = mission.created_at or timezone.now()
     order_number = _order_number(mission)
     if not verification_url:
@@ -961,6 +1017,10 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
             ]
         )
     )
+
+    if signing_as_commander:
+        # The commander's own signature carries no "for the commander" line.
+        signature_label = None
 
     elements = [
         header,
@@ -1058,7 +1118,9 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
             rank_row.hAlign = "LEFT"
             signer_rows.append([rank_row])
 
-        designation = _signer_designation(mission, signer)
+        designation = _signer_designation(
+            mission, signer, as_commander=signing_as_commander
+        )
         if designation:
             signer_rows.append(
                 [Paragraph(_text(designation), _style("signature_regular"))]
@@ -1104,8 +1166,11 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
                 ]
             )
         )
-        elements.append(KeepTogether([signature_label, signer_block]))
-    else:
+        if signature_label is None:
+            elements.append(signer_block)
+        else:
+            elements.append(KeepTogether([signature_label, signer_block]))
+    elif signature_label is not None:
         elements.append(signature_label)
 
     if personnel_count == 0:

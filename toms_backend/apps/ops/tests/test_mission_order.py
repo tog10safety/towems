@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import types
 
 import pytest
 from rest_framework.test import APIClient
@@ -130,6 +131,79 @@ def test_signature_barcode_is_date_plus_numeric_serial(planned_mission):
 
     assert value == "20261107903125"
     assert value.isdigit()
+
+
+def test_a_commander_signs_in_their_own_right(planned_mission):
+    """No "FOR THE ... COMMANDER" line, and the designation of the level."""
+    mission = planned_mission
+    signer = mission.approving_authority
+    assert mission.unit.category == "Squadron"
+
+    assert mission_order_pdf._signing_as_commander(mission, signer) is True
+    assert (
+        mission_order_pdf._signer_designation(mission, signer)
+        == "Squadron Commander"
+    )
+
+
+@pytest.mark.parametrize(
+    "category,expected",
+    [
+        ("Command", "Commander"),
+        ("Wing", "Wing Commander"),
+        ("Group", "Group Commander"),
+        ("Squadron", "Squadron Commander"),
+    ],
+)
+def test_commander_designation_follows_the_unit_level(category, expected):
+    unit = types.SimpleNamespace(category=category)
+
+    assert mission_order_pdf._commander_designation(unit) == expected
+
+
+def test_a_commander_order_has_no_for_the_commander_line(planned_mission):
+    """The rendered order: no "FOR THE ..." line, titled by the unit level."""
+    fitz = pytest.importorskip("fitz")
+
+    pdf = mission_order_pdf.generate_mission_order_pdf(planned_mission)
+    with fitz.open(stream=pdf, filetype="pdf") as document:
+        text = " ".join(
+            " ".join(page.get_text().split()) for page in document
+        )
+
+    assert "FOR THE" not in text
+    assert "Squadron Commander" in text
+
+
+def test_an_appointed_commander_signs_in_their_own_right(planned_mission):
+    """The appointment is what makes somebody the commander, as in production."""
+    from apps.command.models import UnitAppointment
+    from apps.core.roles import ROLE_COMMANDER
+
+    mission = planned_mission
+    commander = make_user(unit=mission.unit, authority="Creator", rank="Col")
+    UnitAppointment.objects.create(
+        unit=mission.unit, user=commander, role=ROLE_COMMANDER
+    )
+
+    assert mission_order_pdf._signing_as_commander(mission, commander) is True
+    assert (
+        mission_order_pdf._signer_designation(mission, commander)
+        == "Squadron Commander"
+    )
+
+
+def test_a_deputy_still_signs_for_the_commander(planned_mission):
+    from apps.command.models import UnitAppointment
+    from apps.core.roles import ROLE_DEPUTY_COMMANDER
+
+    mission = planned_mission
+    deputy = make_user(unit=mission.unit, authority="Creator", rank="Capt")
+    UnitAppointment.objects.create(
+        unit=mission.unit, user=deputy, role=ROLE_DEPUTY_COMMANDER
+    )
+
+    assert mission_order_pdf._signing_as_commander(mission, deputy) is False
 
 
 def test_signature_designation_uses_mission_authority_role(planned_mission):
