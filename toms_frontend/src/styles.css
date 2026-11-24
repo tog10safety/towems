@@ -3102,6 +3102,23 @@ dl.details {
   .sidebar.open {
     transform: translateX(0);
   }
+  /* Every entry stays readable in the half-screen drawer: long labels wrap onto
+     a second line instead of running past the edge, and the icon keeps its own
+     column beside the first line rather than being squeezed by the text. */
+  .sidebar .nav-item {
+    align-items: flex-start;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.28;
+  }
+  .sidebar .nav-item .nav-icon {
+    flex: 0 0 18px;
+    margin-top: 2px;
+  }
+  .sidebar .nav-group-label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .menu-toggle {
     display: inline-block;
   }
