@@ -793,18 +793,16 @@ export default function DriverTrackingPage() {
   // The Operations Center may have written a dispatch ATD; only the driver's
   // own confirmation counts as the wheel-roll, so it is still asked for.
   const awaitingDeparture = Boolean(activeRun && activeRun.atd_source !== "driver");
+  // Arriving and departing are two separate taps on the same stop, and each one
+  // unlocks the next leg: the run is on its way to the next pending stop only
+  // after the stop just reached has been departed. Reading the *pending* stop
+  // for the departure would ask a stop that has not been reached to be arrived
+  // first, so the departure button could never appear after an arrival.
   const canArriveNext = Boolean(
-    editable &&
-      nextStop &&
-      nextIndex > 0 &&
-      nextStop.status === "pending" &&
-      previousStop?.status === "departed"
+    editable && nextStop && previousStop?.status === "departed"
   );
   const canDepartNext = Boolean(
-    editable &&
-      nextStop &&
-      nextStop.status === "arrived" &&
-      nextIndex < activeStops.length - 1
+    editable && nextStop && previousStop?.status === "arrived"
   );
   const allStopsRecorded =
     activeStops.length > 0 && activeStops.every((stop) => stop.status !== "pending");
@@ -843,8 +841,8 @@ export default function DriverTrackingPage() {
       };
     } else if (canDepartNext) {
       primaryAction = {
-        label: `Depart stop ${nextStop.sequence}`,
-        onClick: () => record(activeRun, "depart_stop", nextStop),
+        label: `Depart stop ${previousStop.sequence}`,
+        onClick: () => record(activeRun, "depart_stop", previousStop),
       };
     } else if (allStopsRecorded) {
       primaryAction = {
