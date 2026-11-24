@@ -232,12 +232,13 @@ function DriverHeading({ heading }) {
  * Leaflet is still told when its container changes size - the sheet opening,
  * the map being maximised, the phone turning - which it cannot notice itself.
  */
-function DriverMapFit({ points, planKey, layoutKey, abortKey }) {
+function DriverMapFit({ points, planKey, layoutKey, abortKey, vehicleKey }) {
   const map = useMap();
   const fittedPlan = useRef(null);
   const fittedOnce = useRef(false);
   const movedByDriver = useRef(false);
   const lastAbort = useRef("");
+  const lastVehicle = useRef(null);
   const latestPoints = useRef(points);
   latestPoints.current = points;
 
@@ -273,11 +274,21 @@ function DriverMapFit({ points, planKey, layoutKey, abortKey }) {
   useEffect(() => {
     const plan = latestPoints.current;
     if (!plan.length) return;
-    // An abort order is the one thing that may still take the map: the driver
-    // has to be shown where to go, whatever they were looking at.
-    const forced = Boolean(abortKey) && lastAbort.current !== abortKey;
+    // Two things may still take the map after the driver has moved it: an
+    // abort order, and switching to another vehicle. Both change what the map
+    // is about - where the convoy is going, or which plan is being shown - so
+    // the driver has to be shown the new one. A new position, a new status or
+    // a refresh still may not.
+    const switchedVehicle =
+      lastVehicle.current !== null && lastVehicle.current !== vehicleKey;
+    lastVehicle.current = vehicleKey;
+    const forced =
+      switchedVehicle || (Boolean(abortKey) && lastAbort.current !== abortKey);
     lastAbort.current = abortKey || "";
-    if (!forced) {
+    if (forced) {
+      // The pan belonged to the plan that was on screen a moment ago.
+      movedByDriver.current = false;
+    } else {
       if (fittedPlan.current === planKey) return;
       // Once the driver has moved the map, a new plan may not move it back.
       if (fittedOnce.current && movedByDriver.current) return;
@@ -286,7 +297,7 @@ function DriverMapFit({ points, planKey, layoutKey, abortKey }) {
     fittedOnce.current = true;
     if (plan.length === 1) map.setView(plan[0], 15);
     else map.fitBounds(plan, { padding: [44, 44], maxZoom: 15 });
-  }, [map, planKey, abortKey]);
+  }, [map, planKey, abortKey, vehicleKey]);
 
   return null;
 }
@@ -1083,6 +1094,7 @@ export default function DriverTrackingPage() {
                 points={planPoints}
                 planKey={planKey}
                 layoutKey={`${expanded}:${sheetOpen}`}
+                vehicleKey={activeRunId ?? ""}
                 abortKey={
                   data?.abort?.target
                     ? `${data.abort.target.latitude},${data.abort.target.longitude}`
