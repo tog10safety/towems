@@ -43,6 +43,38 @@ def _switch_device(client, challenge):
     )
 
 
+def _session_opened_before_tracking(user) -> str:
+    """A session that exists only in Django's table, as the deployment left them."""
+    from django.contrib.sessions.backends.db import SessionStore
+
+    store = SessionStore()
+    store["_auth_user_id"] = str(user.pk)
+    store["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
+    store["_auth_user_hash"] = user.get_session_auth_hash()
+    store.create()
+    return store.session_key
+
+
+def test_a_session_opened_before_tracking_still_blocks_a_second_login(creator):
+    from django.contrib.sessions.models import Session
+
+    legacy = _session_opened_before_tracking(creator)
+    assert not DeviceSession.objects.filter(user=creator).exists()
+
+    second = _client()
+    response = _sign_in(second, creator)
+
+    # The account is already held, even though no device row knows that session.
+    assert response.status_code == 409
+    conflict = response.json()["errors"]
+    assert conflict["device"]["label"]
+
+    assert _switch_device(second, conflict["challenge"]).status_code == 200
+    # Confirming the switch ends that session too, so only one device is left.
+    assert not Session.objects.filter(session_key=legacy).exists()
+    assert second.get("/api/auth/me/").status_code == 200
+
+
 def test_a_creator_cannot_sign_in_on_a_second_device(creator):
     first = _client()
     assert _sign_in(first, creator).status_code == 200

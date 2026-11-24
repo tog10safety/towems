@@ -141,6 +141,52 @@ def _live_rows(user, *, exclude_key: str | None = None):
     return live
 
 
+def _untracked_sessions(user, *, exclude_key: str | None = None) -> list:
+    """This account's live sessions that no ``DeviceSession`` row knows about.
+
+    Sessions opened before this feature existed - or by anything that did not go
+    through :func:`remember` - still hold the account, so the single-device rule
+    has to count them. Without this a Creator already signed in elsewhere could
+    simply sign in again and hold two sessions.
+    """
+    from apps.accounts.models import DeviceSession
+
+    tracked = set(
+        DeviceSession.objects.filter(user=user).values_list("session_key", flat=True)
+    )
+    found = []
+    now = timezone.now()
+    for session in Session.objects.filter(expire_date__gt=now):
+        if exclude_key and session.session_key == exclude_key:
+            continue
+        if session.session_key in tracked:
+            continue
+        try:
+            data = session.get_decoded()
+        except Exception:  # pragma: no cover - a corrupt row is simply skipped
+            continue
+        if str(data.get("_auth_user_id")) == str(user.pk):
+            found.append(session)
+    return found
+
+
+def _live_devices(user, *, exclude_key: str | None = None) -> list[dict]:
+    """Every other device holding this account, tracked or not."""
+    devices = [_describe(row) for row in _live_rows(user, exclude_key=exclude_key)]
+    for session in _untracked_sessions(user, exclude_key=exclude_key):
+        devices.append(
+            {
+                "session": session.session_key[:8],
+                "label": "Another browser session",
+                "ip_address": "",
+                "since": "",
+                "last_seen": "",
+                "untracked": True,
+            }
+        )
+    return devices
+
+
 def _describe(row) -> dict:
     return {
         "session": row.session_key[:8],
@@ -153,7 +199,7 @@ def _describe(row) -> dict:
 
 def other_devices(user) -> list[dict]:
     """Devices other than the caller's that currently hold a session."""
-    return [_describe(row) for row in _live_rows(user)]
+    return _live_devices(user)
 
 
 def remember(user, request, session_key: str) -> None:
@@ -195,7 +241,12 @@ def end_others(user, *, keep_key: str | None = None) -> int:
     rows = _live_rows(user, exclude_key=keep_key)
     for row in rows:
         end_session(row.session_key)
-    return len(rows)
+    ended = len(rows)
+    # Sessions opened before they were tracked have no row to delete.
+    for session in _untracked_sessions(user, exclude_key=keep_key):
+        Session.objects.filter(session_key=session.session_key).delete()
+        ended += 1
+    return ended
 
 
 def issue_conflict(user, *, verified: bool, enrollment_required: bool = False) -> str:
@@ -256,12 +307,11 @@ def register_login(
         remember(user, request, session_key)
         return None
 
-    live = _live_rows(user, exclude_key=session_key)
-    if not live:
+    devices = _live_devices(user, exclude_key=session_key)
+    if not devices:
         remember(user, request, session_key)
         return None
 
-    devices = [_describe(row) for row in live]
     first = devices[0]
     return {
         "detail": (
