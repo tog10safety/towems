@@ -3122,6 +3122,38 @@ dl.details {
   .menu-toggle {
     display: inline-block;
   }
+  /* Fit the drawer to the screen the phone actually shows: the dynamic
+     viewport height excludes the browser's own toolbars, the navigation takes
+     the leftover space and scrolls inside itself, and the profile/sign-out
+     block stays pinned at the bottom where it can always be reached. */
+  .sidebar {
+    height: 100dvh;
+    max-height: 100dvh;
+    padding: 12px 10px;
+    gap: 10px;
+    overflow: hidden;
+  }
+  .sidebar nav {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .sidebar .nav-item {
+    padding: 7px 9px;
+  }
+  .sidebar-foot {
+    flex: 0 0 auto;
+    margin-top: 0;
+    padding-top: 8px;
+    gap: 6px;
+  }
+  .sidebar .user-chip {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 0 4px;
+  }
   .content {
     padding: 16px;
   }
