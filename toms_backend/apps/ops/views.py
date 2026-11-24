@@ -964,6 +964,28 @@ def _next_pov_number() -> str:
     return f"POV-{index:04d}"
 
 
+def _pov_registration_number(plate_number: str, current: str = "") -> str:
+    """The identifier a POV is stored under: the plate the planner typed.
+
+    ``registration_number`` is the plate painted on a vehicle, and a POV is
+    identified the same way a unit vehicle is - an internal ``POV-0003`` is not
+    what the board, the driver's screen or the order should read.
+
+    The internal reference stays as the fallback, and only as the fallback: a
+    POV whose plate was left blank, or whose plate is already registered to
+    another vehicle, keeps one so that no car can take another vehicle's
+    identifier.
+    """
+    plate = (plate_number or "").strip()[:40]
+    if plate and not (
+        Vehicle.objects.filter(registration_number__iexact=plate)
+        .exclude(registration_number=current)
+        .exists()
+    ):
+        return plate
+    return current or _next_pov_number()
+
+
 def _apply_mission_vehicles(mission, vehicles, actor, drivers=None):
     """Give each selected vehicle its own trip, keeping existing itineraries.
 
@@ -3618,14 +3640,25 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             )
             vehicle = existing_povs.get(match) or existing_povs.get(match[:3] + ("",))
             if vehicle is not None:
+                fields = ["fuel_type", "registration_no", "updated_at"]
                 vehicle.fuel_type = spec["fuel_type"]
                 vehicle.registration_no = spec["plate_number"]
-                vehicle.save(update_fields=["fuel_type", "registration_no", "updated_at"])
+                # A POV entered before the plate was used as its identifier is
+                # moved onto the plate the moment that plate is known.
+                number = _pov_registration_number(
+                    spec["plate_number"], vehicle.registration_number
+                )
+                if number != vehicle.registration_number:
+                    vehicle.registration_number = number
+                    fields.append("registration_number")
+                vehicle.save(update_fields=fields)
                 drivers[vehicle.id] = spec["driver"]
                 pov_pairs.append((spec, vehicle))
                 continue
             vehicle = Vehicle.objects.create(
-                registration_number=_next_pov_number(),
+                registration_number=_pov_registration_number(
+                    spec["plate_number"]
+                ),
                 vehicle_type=spec["vehicle_type"],
                 make_model=spec["make_model"],
                 registration_no=spec["plate_number"],

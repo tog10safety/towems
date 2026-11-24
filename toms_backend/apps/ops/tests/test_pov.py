@@ -72,7 +72,8 @@ def test_a_pov_is_described_on_the_trip_and_stays_out_of_the_register(
     assert response.status_code == 200, response.content
     row = response.json()["pov_vehicles"][0]
     assert row["client_ref"] == "pov:1"
-    assert row["registration_number"].startswith("POV-")
+    # The plate the planner typed identifies the car, not an internal POV number.
+    assert row["registration_number"] == "PN-12315"
     assert row["plate_number"] == "PN-12315"
     assert row["trip_id"]
 
@@ -100,6 +101,66 @@ def test_a_pov_is_described_on_the_trip_and_stays_out_of_the_register(
     assert shown["plate_number"] == "PN-12315"
     assert shown["owner_name"] == crew["owner"].full_name
     assert shown["fuel_type"] == "Gasoline"
+
+
+def test_a_pov_without_a_plate_keeps_an_internal_reference(as_user, admin, mission, crew):
+    entry = {
+        "client_ref": "pov:1",
+        "vehicle_type": "Motorcycle",
+        "make_model": "Honda XR150",
+        "fuel_type": "Gasoline",
+        "owner": crew["owner"].id,
+    }
+
+    row = assign(as_user, admin, mission, [entry]).json()["pov_vehicles"][0]
+
+    assert row["registration_number"].startswith("POV-")
+
+
+def test_a_pov_does_not_take_a_plate_already_on_the_register(as_user, admin, mission, crew):
+    from apps.ops.models import Vehicle as VehicleModel
+
+    VehicleModel.objects.create(
+        registration_number="PN-12315", vehicle_type="Truck", unit=mission.unit
+    )
+    entry = {
+        "client_ref": "pov:1",
+        "vehicle_type": "Motorcycle",
+        "make_model": "Honda XR150",
+        "plate_number": "PN-12315",
+        "fuel_type": "Gasoline",
+        "owner": crew["owner"].id,
+    }
+
+    row = assign(as_user, admin, mission, [entry]).json()["pov_vehicles"][0]
+
+    assert row["registration_number"].startswith("POV-")
+    assert row["plate_number"] == "PN-12315"
+
+
+def test_re_saving_moves_an_older_pov_onto_its_plate(as_user, admin, mission, crew):
+    entry = {
+        "client_ref": "pov:1",
+        "vehicle_type": "Motorcycle",
+        "make_model": "Honda XR150",
+        "fuel_type": "Gasoline",
+        "owner": crew["owner"].id,
+    }
+    first = assign(as_user, admin, mission, [entry]).json()["pov_vehicles"][0]
+    assert first["registration_number"].startswith("POV-")
+
+    second = assign(
+        as_user,
+        admin,
+        mission,
+        [{**entry, "client_ref": "pov:2", "plate_number": "PN-777"}],
+    )
+    assert second.status_code == 200, second.content
+    again = second.json()["pov_vehicles"][0]
+
+    assert again["vehicle_id"] == first["vehicle_id"]
+    assert again["registration_number"] == "PN-777"
+    assert Vehicle.objects.filter(is_pov=True).count() == 1
 
 
 def test_the_owner_may_be_overridden_as_driver(as_user, admin, mission, crew):
