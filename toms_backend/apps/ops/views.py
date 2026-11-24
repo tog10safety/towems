@@ -1175,6 +1175,7 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
             "tracking_lead",
             "tracking_event",
             "tracking_ping",
+            "tracking_emergency",
             "tracking_complete",
             "tracking_log",
             # The destination Operations Center reads the handoff and decides
@@ -3173,6 +3174,40 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 "last_ping_at": run.last_ping_at,
             }
         )
+
+    @action(detail=True, methods=["post"], url_path="tracking/emergency")
+    def tracking_emergency(self, request, pk=None):
+        """A driver's SOS: logged with the movement and alerted to the board."""
+        from apps.ops import tracking as tracking_service
+        from apps.ops.models import VehicleRun
+
+        mission = self.get_object()
+        raw_run = request.data.get("run")
+        run = (
+            VehicleRun.objects.filter(mission=mission, pk=raw_run).first()
+            if raw_run not in (None, "")
+            else None
+        )
+        if run is None:
+            raise ValidationError({"run": "Choose a vehicle from this mission."})
+        if not tracking_service.can_act(request.user, run):
+            raise PermissionDenied(
+                "Only this vehicle's driver, the convoy lead or the Operations "
+                "Center may report an emergency."
+            )
+
+        rows = tracking_service.send_emergency(
+            mission, run, request.user, note=request.data.get("note", "")
+        )
+        log_action(
+            actor=request.user,
+            action="tracking_emergency",
+            entity_type="vehicle_run",
+            entity_id=run.id,
+            after={"run": run.id, "mission": mission.id, "notified": len(rows)},
+            request=request,
+        )
+        return Response({"run": run.id, "notified": len(rows)})
 
     @action(detail=True, methods=["post"], url_path="tracking/complete")
     def tracking_complete(self, request, pk=None):

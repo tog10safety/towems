@@ -19,6 +19,7 @@ import {
   StatusBadge,
 } from "../components/ui.jsx";
 import PdfViewer from "../components/PdfViewer.jsx";
+import Icon from "../components/Icon.jsx";
 import BasemapControl from "../components/map/BasemapControl.jsx";
 import MapBasemapLayer from "../components/map/MapBasemapLayer.jsx";
 import { useApi } from "../hooks/useApi.js";
@@ -99,9 +100,10 @@ export default function MissionTrackPage() {
   const [basemapFailure, setBasemapFailure] = useState("");
   const [calculating, setCalculating] = useState(false);
   const [routeError, setRouteError] = useState("");
-  // The map is the point of this page, so the route panel starts collapsed and
-  // the map uses the whole width until the operator asks for the details.
+  // Both panels live over the map and open from icons on the map itself, so the
+  // page header stays a header instead of a row of toggles.
   const [panelOpen, setPanelOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
 
   const basemap = useMemo(
@@ -219,6 +221,12 @@ export default function MissionTrackPage() {
   const myRuns = runs.filter((run) => run.driver && String(run.driver) === String(user?.id));
   const uncalculated = trips.filter((trip) => trip.route_status !== "calculated");
 
+  // Everything the mission-information panel shows, resolved once.
+  const risk = data.risk_assessment;
+  const involved = (data.personnel || []).filter((row) => row.is_active !== false);
+  const vehicles = data.vehicles || [];
+  const air = data.air_detail;
+
   return (
     <>
       <div className="page-head">
@@ -243,22 +251,19 @@ export default function MissionTrackPage() {
               {calculating ? "Calculating road route…" : "Calculate road route"}
             </Button>
           )}
-          <Button variant="ghost" onClick={() => setPanelOpen((open) => !open)}>
-            {panelOpen ? "Hide route panel" : "Show route panel"}
-          </Button>
           {runs.length > 0 && (
             <Button variant="ghost" onClick={() => setLogOpen(true)}>
               Movement log
             </Button>
           )}
-          {(myRuns.length > 0 || canManageTracking) && (
+          {/* Only the person designated as a driver on this mission gets the
+              driver screen. The Operations Center monitors from the map and the
+              movement log, so it is never offered a driver's controls. */}
+          {myRuns.length > 0 && (
             <Link className="btn btn-ghost btn-md" to={`/missions/${data.id}/track/driver`}>
               Driver view
             </Link>
           )}
-          <Link className="btn btn-ghost btn-md" to={`/missions/${data.id}`}>
-            Mission details
-          </Link>
         </div>
       </div>
 
@@ -304,12 +309,30 @@ export default function MissionTrackPage() {
         </div>
       )}
 
-      <div
-        className={`map-layout map-layout-track ${
-          panelOpen ? "" : "map-layout-track-wide"
-        }`}
-      >
+      <div className="map-layout map-layout-track">
         <div className="map-canvas map-canvas-track">
+          <div className="map-fabs" role="group" aria-label="Map panels">
+            <button
+              type="button"
+              className={`map-fab${panelOpen ? " is-active" : ""}`}
+              onClick={() => setPanelOpen((open) => !open)}
+              aria-pressed={panelOpen}
+              aria-label="Route panel"
+              title="Route panel"
+            >
+              <Icon name="route" size={19} />
+            </button>
+            <button
+              type="button"
+              className={`map-fab${infoOpen ? " is-active" : ""}`}
+              onClick={() => setInfoOpen((open) => !open)}
+              aria-pressed={infoOpen}
+              aria-label="Mission details"
+              title="Mission details"
+            >
+              <Icon name="info" size={19} />
+            </button>
+          </div>
           <MapContainer
             center={boundsPoints[0] || DEFAULT_CENTER}
             zoom={boundsPoints.length ? 11 : 6}
@@ -442,8 +465,193 @@ export default function MissionTrackPage() {
           </MapContainer>
         </div>
 
+        {infoOpen && (
+          <aside className="card map-overlay map-track-info" aria-label="Mission details">
+            <button
+              type="button"
+              className="map-overlay-close"
+              onClick={() => setInfoOpen(false)}
+              aria-label="Hide mission details"
+              title="Hide mission details"
+            >
+              <Icon name="close" size={16} />
+            </button>
+            <h2>Mission details</h2>
+            <p className="hint">
+              The plan as it was recorded. Nothing here is a live position — the map shows the
+              movement.
+            </p>
+
+            <dl className="details">
+              <div className="detail">
+                <dt>Mission</dt>
+                <dd>
+                  <strong>{data.mission_number}</strong> · {data.title}
+                  <br />
+                  <StatusBadge status={data.status} />{" "}
+                  <Badge tone={data.category === "air" ? "info" : "muted"}>
+                    {data.category === "air" ? "Air Operations" : "Ground Operations"}
+                  </Badge>
+                  {data.unit_acronym ? ` · ${data.unit_acronym}` : ""}
+                </dd>
+              </div>
+              <div className="detail">
+                <dt>Objective</dt>
+                <dd>
+                  {data.purpose || "No objective recorded."}
+                  {data.location_name ? (
+                    <>
+                      <br />
+                      <span className="hint">{data.location_name}</span>
+                    </>
+                  ) : null}
+                  <br />
+                  <span className="hint">
+                    {formatDateTime(data.start_at)}
+                    {data.end_at ? ` – ${formatDateTime(data.end_at)}` : ""}
+                  </span>
+                </dd>
+              </div>
+              <div className="detail">
+                <dt>Risk rating</dt>
+                <dd>
+                  {risk ? (
+                    <>
+                      <strong>{risk.risk_category || "Not rated"}</strong>
+                      {risk.total_percent != null ? ` · ${risk.total_percent}%` : ""}
+                      {risk.authority_level ? (
+                        <>
+                          <br />
+                          <span className="hint">Approval level: {risk.authority_level}</span>
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="hint">{data.mrm?.label || "No risk assessment yet."}</span>
+                  )}
+                </dd>
+              </div>
+              <div className="detail">
+                <dt>Itineraries</dt>
+                <dd>
+                  {trips.length === 0 && !air ? (
+                    <span className="hint">No itinerary planned.</span>
+                  ) : null}
+                  {trips.map((trip) => (
+                    <div key={trip.trip_id} style={{ marginBottom: 6 }}>
+                      <strong>{trip.trip_number || `Trip ${trip.trip_id}`}</strong>
+                      {(trip.itinerary || []).length === 0 ? (
+                        <span className="hint"> · no stops</span>
+                      ) : (
+                        <ol className="hint" style={{ margin: "4px 0 0 16px" }}>
+                          {(trip.itinerary || []).map((stop) => (
+                            <li key={stop.id}>
+                              {stop.location_name}
+                              {stop.planned_departure
+                                ? ` · ${formatDateTime(stop.planned_departure)}`
+                                : ""}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  ))}
+                  {air ? (
+                    <div>
+                      <strong>
+                        {air.departure_location || "Departure"} →{" "}
+                        {air.destination_location || "Destination"}
+                      </strong>
+                      {air.route ? (
+                        <>
+                          <br />
+                          <span className="hint">{air.route}</span>
+                        </>
+                      ) : null}
+                      <br />
+                      <span className="hint">
+                        {formatDateTime(air.scheduled_departure)}
+                        {air.scheduled_arrival
+                          ? ` – ${formatDateTime(air.scheduled_arrival)}`
+                          : ""}
+                      </span>
+                    </div>
+                  ) : null}
+                </dd>
+              </div>
+              <div className="detail">
+                <dt>Vehicle details</dt>
+                <dd>
+                  {vehicles.length === 0 ? (
+                    <span className="hint">No vehicle assigned.</span>
+                  ) : (
+                    <ul className="hint" style={{ margin: 0, paddingLeft: 16 }}>
+                      {vehicles.map((vehicle) => (
+                        <li key={`${vehicle.trip_id}-${vehicle.vehicle_id}`}>
+                          <strong>{vehicle.registration_number}</strong>
+                          {vehicle.make_model ? ` · ${vehicle.make_model}` : ""}
+                          {vehicle.vehicle_type ? ` · ${vehicle.vehicle_type}` : ""}
+                          {vehicle.capacity ? ` · ${vehicle.capacity} seats` : ""}
+                          <br />
+                          Driver: {vehicle.driver_name || "not designated"}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </dd>
+              </div>
+              <div className="detail">
+                <dt>Personnel involved</dt>
+                <dd>
+                  {involved.length === 0 ? (
+                    <span className="hint">No personnel listed.</span>
+                  ) : (
+                    <ul className="hint" style={{ margin: 0, paddingLeft: 16 }}>
+                      {involved.map((row) => (
+                        <li key={row.id}>
+                          {row.rank ? `${row.rank} ` : ""}
+                          {row.user_name}
+                          {row.display_role ? ` · ${row.display_role}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </dd>
+              </div>
+              <div className="detail">
+                <dt>Authority</dt>
+                <dd>
+                  {risk?.decision_authority_label ? (
+                    <>
+                      {risk.decision_authority_label}
+                      {risk.decision_authority_name ? (
+                        <span className="hint"> · {risk.decision_authority_name}</span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="hint">Not yet designated.</span>
+                  )}
+                  <br />
+                  <span className="hint">
+                    Mission approval: {data.approval?.stage_label || data.status}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          </aside>
+        )}
+
         {panelOpen && (
-        <aside className="card map-track-side">
+        <aside className="card map-track-side map-overlay" aria-label="Route panel">
+          <button
+            type="button"
+            className="map-overlay-close"
+            onClick={() => setPanelOpen(false)}
+            aria-label="Hide route panel"
+            title="Hide route panel"
+          >
+            <Icon name="close" size={16} />
+          </button>
           <h2>Planned movement</h2>
           <p className="hint">
             Routes follow the road network calculated by the routing engine; stops keep their

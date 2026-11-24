@@ -435,6 +435,70 @@ def test_the_lead_vehicle_is_unique_and_may_record_convoy_milestones(
     assert event.source == MovementEvent.SOURCE_LEAD
 
 
+def test_the_driver_reports_an_emergency_to_the_operations_center(
+    as_user, planner, driver, tracked_mission
+):
+    mission, *_ = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    run.last_latitude = 14.61
+    run.last_longitude = 121.07
+    run.save(update_fields=["last_latitude", "last_longitude"])
+
+    response = as_user(driver).post(
+        f"/api/missions/{mission.id}/tracking/emergency/",
+        {"run": run.id, "note": "Ambush on the highway"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    assert response.json()["notified"] == 1
+    alert = Notification.objects.get(recipient=planner, category="emergency")
+    assert alert.level == "danger"
+    assert alert.priority == "urgent"
+    assert "Ambush on the highway" in alert.message
+    assert "14.61000, 121.07000" in alert.message
+    assert alert.action_url == f"/missions/{mission.id}/track"
+    # The log keeps the exception beside the vehicle's last known position.
+    event = MovementEvent.objects.get(run=run, kind=MovementEvent.KIND_EXCEPTION)
+    assert event.latitude == pytest.approx(14.61)
+    assert event.source == MovementEvent.SOURCE_DRIVER
+
+    # A second press inside the window is the same emergency.
+    again = as_user(driver).post(
+        f"/api/missions/{mission.id}/tracking/emergency/",
+        {"run": run.id},
+        format="json",
+    )
+    assert again.status_code == 200, again.content
+    assert again.json()["notified"] == 0
+    assert Notification.objects.filter(category="emergency").count() == 1
+    assert (
+        MovementEvent.objects.filter(
+            run=run, kind=MovementEvent.KIND_EXCEPTION
+        ).count()
+        == 1
+    )
+
+
+def test_an_outsider_cannot_report_an_emergency(
+    as_user, planner, tracked_mission, unit
+):
+    mission, *_ = tracked_mission
+    start(as_user(planner), mission)
+    run = VehicleRun.objects.get(mission=mission)
+    stranger = make_user(unit=unit, authority="Creator")
+
+    response = as_user(stranger).post(
+        f"/api/missions/{mission.id}/tracking/emergency/",
+        {"run": run.id},
+        format="json",
+    )
+
+    assert response.status_code in {403, 404}
+    assert not Notification.objects.filter(category="emergency").exists()
+
+
 def test_a_ping_with_a_bad_position_is_rejected(
     as_user, planner, driver, tracked_mission
 ):

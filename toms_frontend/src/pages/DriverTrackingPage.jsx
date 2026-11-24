@@ -111,6 +111,18 @@ function haversineKm(first, second) {
   return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/**
+ * The itinerary as it was recorded: origin, every stop, destination, in order.
+ * Stop names are shown exactly as the plan stores them - the label must never
+ * quietly edit the mission a driver is being held to.
+ */
+function itineraryLabel(stops) {
+  return (stops || [])
+    .map((stop) => String(stop.location_name || "").trim())
+    .filter(Boolean)
+    .join(" - ");
+}
+
 function stopPin(stop, isNext, isFinal) {
   const tone =
     stop.status === "departed" || (isFinal && stop.status === "arrived")
@@ -212,6 +224,26 @@ function ExpandGlyph({ expanded }) {
           <path d="M9 20H4v-5" />
         </>
       )}
+    </svg>
+  );
+}
+
+function AlertGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3 2.5 20h19L12 3Z" />
+      <path d="M12 9v5" />
+      <path d="M12 17.5v.01" />
     </svg>
   );
 }
@@ -318,6 +350,11 @@ export default function DriverTrackingPage() {
     readStored(BASEMAP_STORAGE_KEY, "")
   );
   const [basemapFailure, setBasemapFailure] = useState("");
+  const [sosOpen, setSosOpen] = useState(false);
+  const [sosNote, setSosNote] = useState("");
+  const [sosBusy, setSosBusy] = useState(false);
+  const [sosMessage, setSosMessage] = useState("");
+  const [sosError, setSosError] = useState("");
 
   const queue = useRef([]);
   const queueRun = useRef(null);
@@ -601,11 +638,61 @@ export default function DriverTrackingPage() {
     }
   }
 
+  async function sendEmergency() {
+    const run = activeRun || myRuns[0] || (canRecordOthers ? actionable[0] : null);
+    if (!run) {
+      setSosError("No open vehicle run is available to report the emergency against.");
+      return;
+    }
+    setSosBusy(true);
+    setSosError("");
+    setSosMessage("");
+    try {
+      const result = await api.post(`/missions/${id}/tracking/emergency/`, {
+        run: run.id,
+        note: sosNote.trim(),
+      });
+      setSosNote("");
+      setSosMessage(
+        result?.notified
+          ? "Emergency alert sent to the Operations Center."
+          : "This emergency was already reported; the Operations Center has it."
+      );
+      reload();
+    } catch (err) {
+      setSosError(err.message || "The emergency could not be sent.");
+    } finally {
+      setSosBusy(false);
+    }
+  }
+
   if (loading && !data) return <Loading label="Loading your movement task…" />;
   if (error) return <ErrorBanner message={error} onRetry={reload} />;
   if (!data) return null;
 
+  // This screen belongs to the person designated as a driver on the mission.
+  // The Operations Center follows movement from the mission map and the
+  // movement log, so it is not given a driver's controls.
+  if (!data.is_driver) {
+    return (
+      <div className="card" style={{ padding: 16 }}>
+        <h2>Driver view</h2>
+        <p className="hint">
+          This screen is for the person designated as the driver on this mission. Your account
+          is not on the driver roster, so the movement controls are not available here.
+        </p>
+        <p className="hint">
+          <Link to={`/missions/${id}/track`}>← Back to the mission map</Link>
+        </p>
+      </div>
+    );
+  }
+
   const mission = data.mission;
+  // The driver reads their own itinerary first; the destination address is the
+  // Operations Center's view of the mission, not a heading for the wheel.
+  const itineraryRun = activeRun || myRuns[0] || actionable[0] || runs[0] || null;
+  const itinerary = itineraryLabel(itineraryRun?.stops);
   const activeDelay = delays.find((row) => row.run === activeRun?.id) || null;
   const mine = Boolean(activeRun && String(activeRun.driver) === String(user?.id));
   const editable = Boolean(
@@ -660,18 +747,10 @@ export default function DriverTrackingPage() {
   return (
     <div className={`driver-app${expanded ? " is-expanded" : ""}`}>
       <header className="driver-bar">
-        <Link
-          className="driver-icon-button"
-          to={`/missions/${mission.id}`}
-          aria-label="Back to the mission record"
-          title="Back to the mission record"
-        >
-          ←
-        </Link>
         <div className="driver-bar-copy">
           <strong>{mission.mission_number}</strong>
           <span>
-            {mission.location_name || mission.title} ·{" "}
+            {itinerary || mission.title} ·{" "}
             <StatusBadge status={mission.status} />
           </span>
         </div>
@@ -838,6 +917,19 @@ export default function DriverTrackingPage() {
             <div className="driver-map-actions">
               <button
                 type="button"
+                className="driver-map-button is-sos"
+                onClick={() => {
+                  setSosOpen(true);
+                  setSosError("");
+                  setSosMessage("");
+                }}
+                aria-label="Send an emergency alert"
+                title="Emergency alert"
+              >
+                <AlertGlyph />
+              </button>
+              <button
+                type="button"
                 className="driver-map-button"
                 onClick={() => setFocusToken((value) => value + 1)}
                 aria-label="Centre the map on my position"
@@ -855,6 +947,64 @@ export default function DriverTrackingPage() {
                 <ExpandGlyph expanded={expanded} />
               </button>
             </div>
+
+            {/* Always reachable: the sheet can be collapsed, the alert cannot
+                be hidden behind it. */}
+            {sosOpen && (
+              <div
+                className="driver-sos-panel"
+                role="dialog"
+                aria-label="Emergency alert"
+              >
+                <div className="driver-sos-head">
+                  <h3>Emergency</h3>
+                  <span className="hint">
+                    Alerts the Operations Center at once with your vehicle and last
+                    reported position.
+                  </span>
+                </div>
+                {sosMessage ? (
+                  <>
+                    <div className="alert alert-warning" role="status">
+                      {sosMessage}
+                    </div>
+                    <div className="driver-actions-row">
+                      <Button variant="ghost" onClick={() => setSosOpen(false)}>
+                        Close
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      className="input"
+                      value={sosNote}
+                      maxLength={300}
+                      onChange={(event) => setSosNote(event.target.value)}
+                      placeholder="What happened (optional)"
+                      aria-label="Emergency details"
+                    />
+                    <div className="driver-actions-row">
+                      <Button
+                        variant="danger"
+                        onClick={sendEmergency}
+                        disabled={sosBusy}
+                      >
+                        {sosBusy ? "Sending…" : "Send alert now"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={() => setSosOpen(false)}
+                        disabled={sosBusy}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                    {sosError && <p className="field-message">{sosError}</p>}
+                  </>
+                )}
+              </div>
+            )}
 
             <aside
               className={`driver-panel${sheetOpen ? " is-open" : ""}`}
@@ -1151,9 +1301,6 @@ export default function DriverTrackingPage() {
             )}
           </dl>
         )}
-        <p className="hint">
-          <Link to={`/missions/${mission.id}/track`}>Open the convoy map</Link>
-        </p>
       </div>
     </div>
   );

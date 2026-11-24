@@ -893,6 +893,78 @@ def record_pings(run, actor, rows, *, source=TrackingPing.SOURCE_MOBILE):
 
 
 # ---------------------------------------------------------------------------
+# Emergency
+# ---------------------------------------------------------------------------
+
+#: A driver's SOS is one event, not a stream: a repeat press inside this window
+#: is the same emergency and must not page the Operations Center twice.
+EMERGENCY_REPEAT_MINUTES = 5
+EMERGENCY_CATEGORY = "emergency"
+
+
+@transaction.atomic
+def send_emergency(mission, run, actor, *, note=""):
+    """The driver's SOS: recorded in the log and alerted to the Operations Center.
+
+    The alert is durable and critical, so it reaches the Operations Center as a
+    notification that deep-links to the mission map, whether or not anyone is
+    watching the board at that moment. The movement log keeps the exception
+    event with the vehicle's last known position as the evidence.
+    """
+    if run.mission_id != mission.id:
+        raise ValidationError(
+            {"run": "That vehicle run is not part of this mission."}
+        )
+
+    cutoff = timeutils.now() - dt.timedelta(minutes=EMERGENCY_REPEAT_MINUTES)
+    if Notification.objects.filter(
+        category=EMERGENCY_CATEGORY,
+        related_type="vehicle_run",
+        related_id=str(run.id),
+        created_at__gte=cutoff,
+    ).exists():
+        return []
+
+    text = " ".join(str(note or "").split())[:500]
+    label = f"{run.vehicle.registration_number} · {mission.mission_number}"
+    reporter = run.driver.full_name if run.driver_id else "A driver"
+    position = ""
+    if run.last_latitude is not None and run.last_longitude is not None:
+        position = (
+            f" Last reported position: {run.last_latitude:.5f}, "
+            f"{run.last_longitude:.5f}."
+        )
+    message = (
+        f"{reporter} reported an emergency on {label} ({mission.title})."
+        f"{' ' + text if text else ''}{position}"
+    )
+
+    _event(
+        run,
+        MovementEvent.KIND_EXCEPTION,
+        actor=actor,
+        note=text or "Emergency reported by the driver.",
+        latitude=run.last_latitude,
+        longitude=run.last_longitude,
+    )
+
+    from apps.ops.notifications import notify_many
+
+    return notify_many(
+        monitor_recipients(mission),
+        title=f"EMERGENCY: {label}",
+        message=message,
+        level="danger",
+        category=EMERGENCY_CATEGORY,
+        priority="urgent",
+        related=("vehicle_run", run.id),
+        actor=actor,
+        action_url=f"/missions/{mission.id}/track",
+        requires_action=False,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Delay monitoring
 # ---------------------------------------------------------------------------
 
