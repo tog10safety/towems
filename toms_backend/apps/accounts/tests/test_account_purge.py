@@ -28,7 +28,7 @@ def test_only_the_seat_holder_may_delete_an_account(as_user, admin):
     )
 
     assert response.status_code == 400
-    assert "Super Administrator" in str(response.json())
+    assert "Administrator" in str(response.json())
     assert User.objects.filter(pk=target.id).exists()
 
 

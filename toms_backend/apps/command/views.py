@@ -284,7 +284,7 @@ class OfficeSectionViewSet(viewsets.ModelViewSet):
 
         if not can_delete_records(self.request.user):
             raise PermissionDenied(
-                "Only the Super Administrator may permanently delete an office "
+                "Only an Administrator may permanently delete an office "
                 "or section. Deactivate it instead."
             )
         removed_assignments = list(

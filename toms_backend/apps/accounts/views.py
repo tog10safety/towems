@@ -876,7 +876,7 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError(
                 {
                     "authority": (
-                        "Only the Super Administrator may create or promote an "
+                        "Only an Administrator may create or promote another "
                         "Administrator account."
                     )
                 }
@@ -890,7 +890,7 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError(
                 {
                     "authority": (
-                        "Hand the Super Administrator seat over before changing "
+                        "Hand the Administrator seat over before changing "
                         "this account's role."
                     )
                 }
@@ -938,7 +938,7 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError(
                 {
                     "detail": (
-                        "Hand the Super Administrator seat over before "
+                        "Hand the Administrator seat over before "
                         "deactivating this account."
                     )
                 }
@@ -1033,7 +1033,7 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
             user=request.user,
             activity_type="system_owner_handover",
             module="users",
-            description=f"Handed the Super Administrator seat to @{target.username}",
+            description=f"Handed the Administrator seat to @{target.username}",
             request=request,
             resource_id=target.id,
             resource_type="user",

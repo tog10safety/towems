@@ -249,7 +249,7 @@ def can_delete(user, form) -> tuple[bool, str]:
     if can_delete_records(user):
         return True, ""
     return False, (
-        "Only the Super Administrator may permanently delete an MRM assessment."
+        "Only an Administrator may permanently delete an MRM assessment."
     )
 
 

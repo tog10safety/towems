@@ -6,7 +6,7 @@ import { IconButton } from "./ui.jsx";
 /**
  * Permanent deletion, and the only place in the app that offers it.
  *
- * The Super Administrator seat is the single account allowed to erase a record,
+ * The Administrator seat is the single account allowed to erase a record,
  * and every delete route checks that again server-side. For everyone else this
  * control renders nothing at all rather than a disabled button: the capability
  * is not theirs to see.

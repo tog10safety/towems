@@ -1354,7 +1354,7 @@ class MissionViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
 
         if not can_delete_records(self.request.user):
             raise PermissionDenied(
-                "Only the Super Administrator may permanently delete a mission. "
+                "Only an Administrator may permanently delete a mission. "
                 "Cancel it instead."
             )
         from apps.ops import tracking
@@ -5463,7 +5463,7 @@ class InventoryItemViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
 
         if not can_delete_records(request.user):
             raise PermissionDenied(
-                "Only the Super Administrator may purge an inventory item with "
+                "Only an Administrator may purge an inventory item with "
                 "its ledger."
             )
 
@@ -5493,7 +5493,7 @@ class InventoryItemViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSet):
                 entity_type="inventory_item",
                 entity_id=item_id,
                 before=label,
-                note="Purged with its ledger by the Super Administrator",
+                note="Purged with its ledger by an Administrator",
                 request=request,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -6448,7 +6448,7 @@ class AreaOfResponsibilityViewSet(AuditedModelViewSetMixin, viewsets.ModelViewSe
 
         if not can_delete_records(request.user):
             raise PermissionDenied(
-                "Only the Super Administrator may permanently delete an AOR "
+                "Only an Administrator may permanently delete an AOR "
                 "record. Archive it instead."
             )
         aor = self.get_object()

@@ -191,7 +191,7 @@ def test_only_the_owner_may_create_an_administrator(as_user, admin, unit):
         format="json",
     )
     assert refused.status_code == 400
-    assert "Super Administrator" in str(refused.json())
+    assert "Administrator" in str(refused.json())
 
     allowed = as_user(admin).post(
         "/api/personnel/",

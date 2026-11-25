@@ -24,7 +24,7 @@ from apps.core import roles
 
 class Command(BaseCommand):
     help = (
-        "Show, appoint or vacate the single Super Administrator seat. "
+        "Show, appoint or vacate the single Administrator seat. "
         "Break-glass only: requires shell access to the server."
     )
 
@@ -76,7 +76,7 @@ class Command(BaseCommand):
                 return
             self.stdout.write(
                 self.style.WARNING(
-                    f"The Super Administrator seat held by @{outgoing.username} is vacant."
+                    f"The Administrator seat held by @{outgoing.username} is vacant."
                 )
             )
             return
@@ -99,17 +99,17 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"@{target.username} now holds the Super Administrator seat."
+                f"@{target.username} now holds the Administrator seat."
             )
         )
 
     def _show(self):
         owner = ownership.current_owner()
         if owner is None:
-            self.stdout.write(self.style.WARNING("The Super Administrator seat is vacant."))
+            self.stdout.write(self.style.WARNING("The Administrator seat is vacant."))
         else:
             self.stdout.write(
-                self.style.SUCCESS(f"Super Administrator: @{owner.username} ({owner.full_name})")
+                self.style.SUCCESS(f"Administrator: @{owner.username} ({owner.full_name})")
             )
         administrators = User.objects.filter(
             authority=roles.BASE_ADMIN, is_active=True

@@ -382,7 +382,7 @@ class PersonnelWriteSerializer(serializers.ModelSerializer):
             request = self.context.get("request")
             if not ownership.can_grant_administrator(getattr(request, "user", None)):
                 raise serializers.ValidationError(
-                    "Only the Super Administrator may create or promote an "
+                    "Only an Administrator may create or promote another "
                     "Administrator account."
                 )
 

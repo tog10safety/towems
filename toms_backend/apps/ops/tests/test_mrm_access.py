@@ -313,7 +313,7 @@ def test_unit_safety_officer_may_not_delete_an_assessment(as_user, safety, mrm_f
     response = as_user(safety).delete(f"/api/risk-register/{mrm_form.id}/")
 
     assert response.status_code == 403
-    assert "Super Administrator" in response.json()["detail"]
+    assert "Administrator" in response.json()["detail"]
     assert MRMForm.objects.filter(pk=mrm_form.id).exists()
 
 
@@ -326,7 +326,7 @@ def test_unit_safety_officer_may_not_delete_an_approved_assessment(
     response = as_user(safety).delete(f"/api/risk-register/{mrm_form.id}/")
 
     assert response.status_code == 403
-    assert "Super Administrator" in response.json()["detail"]
+    assert "Administrator" in response.json()["detail"]
     assert MRMForm.objects.filter(pk=mrm_form.id).exists()
 
 

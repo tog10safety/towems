@@ -94,6 +94,7 @@ INSTALLED_APPS = [
     "apps.legacy",
     "apps.ops",
     "apps.command",
+    "apps.messaging",
 ]
 
 MIDDLEWARE = [
@@ -344,5 +345,45 @@ AUTHORITY_CHOICES = [
 
 RISK_SEVERITIES = ["A", "B", "C", "D", "E"]
 RISK_LIKELIHOODS = [1, 2, 3, 4, 5]
+
+# --------------------------------------------------------------------------
+# Private messaging
+# --------------------------------------------------------------------------
+# Retention is a deployment decision: ``purge_messages`` deletes messages past
+# this window (from the scheduler), and the API reports the value to the UI.
+MESSAGING_RETENTION_DAYS = int(env("TOMS_MESSAGING_RETENTION_DAYS", "365"))
+MESSAGING_MAX_MESSAGE_LENGTH = int(env("TOMS_MESSAGING_MAX_LENGTH", "4000"))
+MESSAGING_PAGE_SIZE = int(env("TOMS_MESSAGING_PAGE_SIZE", "40"))
+#: How long a "typing…" mark stays meaningful; abandoned composers age out.
+MESSAGING_TYPING_SECONDS = int(env("TOMS_MESSAGING_TYPING_SECONDS", "6"))
+#: Mirrors the presence window used by the top-bar "online now" rail.
+MESSAGING_ONLINE_MINUTES = int(env("TOMS_MESSAGING_ONLINE_MINUTES", "5"))
+
+# --- Closed-tab browser push -------------------------------------------------
+# Generate one key pair per deployment with `manage.py vapid_keys` and keep it
+# in the environment. VAPID_PRIVATE_KEY is base64-wrapped PEM so it fits on a
+# single env line; VAPID_PUBLIC_KEY is the base64url point the browser needs.
+# With no keys the API reports push as disabled and messaging works as before.
+VAPID_PUBLIC_KEY = env("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = env("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = env("VAPID_SUBJECT", "mailto:no-reply@mrm-system.online")
+#: How long a push service may retain an undelivered alert (seconds).
+MESSAGING_PUSH_TTL = int(env("TOMS_MESSAGING_PUSH_TTL", "86400"))
+#: Browser push endpoints the server will POST to. Browsers hand these out
+#: themselves, so the list keeps a forged subscription from turning the sender
+#: into a request to an internal host (blind SSRF). Extend only for a new
+#: browser vendor's push service.
+MESSAGING_PUSH_ALLOWED_HOSTS = tuple(
+    host.strip().lower()
+    for host in (
+        env(
+            "TOMS_MESSAGING_PUSH_HOSTS",
+            "fcm.googleapis.com,android.googleapis.com,push.services.mozilla.com,"
+            "notify.windows.com,push.apple.com",
+        )
+        or ""
+    ).split(",")
+    if host.strip()
+)
 
 # Environment modules (dev/staging/prod) validate their own requirements.

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="TOWEMS emblem">
+  <title>TOWEMS</title>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="0.15" y2="1">
+      <stop offset="0" stop-color="#f6e3a3"/>
+      <stop offset="0.45" stop-color="#c9a227"/>
+      <stop offset="1" stop-color="#8a6d12"/>
+    </linearGradient>
+    <clipPath id="shield-clip">
+      <path d="M128 62 L178 82 V130 C178 160 154 182 128 194 C102 182 78 160 78 130 V82 Z"/>
+    </clipPath>
+    <path id="star" d="M0 -8 L1.9 -2.5 L7.6 -2.4 L3.2 1 L4.7 6.4 L0 3.6 L-4.7 6.4 L-3.2 1 L-7.6 -2.4 L-1.9 -2.5 Z"/>
+  </defs>
+
+  <!-- Badge -->
+  <circle cx="128" cy="128" r="124" fill="#0d1b2a"/>
+  <circle cx="128" cy="128" r="118" fill="none" stroke="url(#gold)" stroke-width="4.5"/>
+  <circle cx="128" cy="128" r="110" fill="none" stroke="#1d3a5c" stroke-width="1.5"/>
+
+  <!-- Wings: three swept feathers a side, rising away from the shield -->
+  <g fill="url(#gold)">
+    <path d="M100 96 C 78 84 56 76 36 74 C 52 88 74 100 100 110 Z"/>
+    <path d="M102 116 C 78 110 52 108 30 112 C 48 124 74 130 102 130 Z"/>
+    <path d="M100 136 C 78 138 56 146 40 158 C 60 158 82 150 100 146 Z"/>
+  </g>
+  <g fill="url(#gold)" transform="translate(256 0) scale(-1 1)">
+    <path d="M100 96 C 78 84 56 76 36 74 C 52 88 74 100 100 110 Z"/>
+    <path d="M102 116 C 78 110 52 108 30 112 C 48 124 74 130 102 130 Z"/>
+    <path d="M100 136 C 78 138 56 146 40 158 C 60 158 82 150 100 146 Z"/>
+  </g>
+
+  <!-- Shield with the tactical picture inside -->
+  <path d="M128 62 L178 82 V130 C178 160 154 182 128 194 C102 182 78 160 78 130 V82 Z"
+        fill="#122740" stroke="url(#gold)" stroke-width="5"/>
+  <g clip-path="url(#shield-clip)" stroke="#6fd3e8" stroke-opacity="0.22" stroke-width="1">
+    <path d="M70 100 H186 M70 120 H186 M70 140 H186 M70 160 H186 M70 180 H186"/>
+    <path d="M100 56 V200 M128 56 V200 M156 56 V200"/>
+  </g>
+  <path d="M92 138 A 36 36 0 0 1 164 138" fill="none" stroke="#6fd3e8" stroke-opacity="0.45" stroke-width="2"/>
+  <polyline points="104,158 138,138 118,104" fill="none" stroke="#6fd3e8" stroke-width="3.5"
+            stroke-linejoin="round" stroke-linecap="round"/>
+  <g fill="#a9edfb">
+    <circle cx="104" cy="158" r="4.6"/>
+    <circle cx="138" cy="138" r="4.6"/>
+    <circle cx="118" cy="104" r="4.6"/>
+  </g>
+
+  <!-- Three stars over the shield -->
+  <g fill="url(#gold)">
+    <use href="#star" transform="translate(128 40) scale(0.95)"/>
+    <use href="#star" transform="translate(100 48) scale(0.7)"/>
+    <use href="#star" transform="translate(156 48) scale(0.7)"/>
+  </g>
+</svg>

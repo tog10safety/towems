@@ -63,7 +63,7 @@ export default function MissionsPage({ category: categoryProp = "ground" }) {
   const canView =
     Boolean(permissions?.can_view_missions) ||
     (categoryProp === "air" && Boolean(permissions?.can_record_air_fuel));
-  // Erasing a mission is the Super Administrator's alone; the server enforces
+  // Erasing a mission is an Administrator's alone; the server enforces
   // the same rule, so this only decides whether the button is offered.
   const isAdmin = Boolean(permissions?.is_system_owner);
   // Ground and air are separate pages: the route decides which register this

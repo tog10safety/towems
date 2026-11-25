@@ -25,6 +25,7 @@ const MissionDetailPage = lazy(() => import("./pages/MissionDetailPage.jsx"));
 const MissionFormPage = lazy(() => import("./pages/MissionFormPage.jsx"));
 const MissionsPage = lazy(() => import("./pages/MissionsPage.jsx"));
 const MissionTrackPage = lazy(() => import("./pages/MissionTrackPage.jsx"));
+const MessagesPage = lazy(() => import("./pages/MessagesPage.jsx"));
 const MobilityAssetsPage = lazy(() => import("./pages/MobilityAssetsPage.jsx"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage.jsx"));
 const OfficeSectionsPage = lazy(() => import("./pages/OfficeSectionsPage.jsx"));
@@ -164,6 +165,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="messages" element={<MessagesPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />

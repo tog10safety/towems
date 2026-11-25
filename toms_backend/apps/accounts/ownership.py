@@ -126,14 +126,14 @@ def hand_over(
         actor is None or outgoing.id != getattr(actor, "id", None)
     ):
         raise SystemOwnerError(
-            "Only the current Super Administrator may hand the seat over."
+            "Only the current Administrator may hand the seat over."
         )
 
     previous_authority = successor.authority
     if previous_authority != roles.BASE_ADMIN:
         if not promote:
             raise SystemOwnerError(
-                "The Super Administrator must also be an Administrator account."
+                "The account taking the seat must already be an Administrator."
             )
         successor.authority = roles.BASE_ADMIN
         successor.save(update_fields=["authority"])

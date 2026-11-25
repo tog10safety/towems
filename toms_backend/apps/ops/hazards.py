@@ -183,7 +183,7 @@ def _writable_unit(user, unit_id) -> Unit:
         own = getattr(user, "unit_id", None)
         if own is None:
             raise HazardError(
-                "Your account has no unit; the Administrator must assign one before "
+                "Your account has no unit; an Administrator must assign one before "
                 "you can maintain a hazard library."
             )
         unit_id = own

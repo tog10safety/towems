@@ -96,7 +96,7 @@ export default function UnitChangeRequestsPage() {
           <p>
             Moving a person to another unit ends every post they hold where they
             were and leaves them with the Creator role only. Only an Administrator
-            or the Super Administrator may approve a move; each request is also
+            may approve a move; each request is also
             delivered to the notification bell.
           </p>
         </div>

@@ -153,7 +153,7 @@ def request_unit_change(user, unit, *, note="", request=None):
         raise UnitChangeError("That unit is not active.")
     if ownership.is_system_owner(user):
         raise UnitChangeError(
-            "The Super Administrator's unit is changed by another administrator, "
+            "An Administrator's unit is changed by another administrator, "
             "after handing the seat over."
         )
     if unit.id == user.unit_id:
@@ -251,13 +251,13 @@ def cancel_request(user, *, request=None):
 def _check_decidable(row, actor) -> None:
     if not can_decide(actor):
         raise UnitChangeError(
-            "Only an Administrator or the Super Administrator may decide a unit "
+            "Only an Administrator may decide a unit "
             "change request."
         )
     if row.requester_id == getattr(actor, "id", None):
         raise UnitChangeError(
             "You cannot decide your own unit change request. Another Administrator "
-            "or the Super Administrator must review it."
+            "must review it."
         )
 
 

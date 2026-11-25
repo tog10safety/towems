@@ -51,7 +51,7 @@ def delete_account(account, *, actor, reason: str, request=None):
         raise PurgeError("Record why the account is being deleted.")
     if not ownership.is_system_owner(actor):
         raise PurgeError(
-            "Only the Super Administrator may permanently delete an account."
+            "Only an Administrator may permanently delete an account."
         )
     if account is None:
         raise PurgeError("Choose an account to delete.")
@@ -59,7 +59,7 @@ def delete_account(account, *, actor, reason: str, request=None):
         raise PurgeError("You cannot delete your own account.")
     if ownership.is_system_owner(account):
         raise PurgeError(
-            "Hand the Super Administrator seat over before deleting this account."
+            "Hand the Administrator seat over before deleting this account."
         )
 
     found = {name: count for name, count in blockers(account).items() if count}
@@ -76,6 +76,7 @@ def delete_account(account, *, actor, reason: str, request=None):
         SectionAssignment,
         UnitAppointment,
     )
+    from apps.messaging.models import PushSubscription
     from apps.ops.models import MRMAttentionDismissal, Notification
 
     account_id = account.id
@@ -93,6 +94,7 @@ def delete_account(account, *, actor, reason: str, request=None):
     UserMFA.objects.filter(user_id=account_id).delete()
     MRMAttentionDismissal.objects.filter(user_id=account_id).delete()
     Notification.objects.filter(recipient_id=account_id).delete()
+    PushSubscription.objects.filter(user_id=account_id).delete()
     SectionAssignment.objects.filter(user_id=account_id).delete()
     UnitAppointment.objects.filter(user_id=account_id).delete()
     ActingAppointment.objects.filter(user_id=account_id).delete()

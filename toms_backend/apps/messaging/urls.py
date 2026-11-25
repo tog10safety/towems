@@ -1,0 +1,83 @@
+from django.urls import path
+
+from apps.messaging import views
+
+urlpatterns = [
+    path("messaging/people/", views.PeopleSearchView.as_view(), name="messaging-people"),
+    path(
+        "messaging/conversations/",
+        views.ConversationListCreateView.as_view(),
+        name="messaging-conversations",
+    ),
+    path(
+        "messaging/conversations/<int:pk>/messages/",
+        views.MessageListCreateView.as_view(),
+        name="messaging-messages",
+    ),
+    path(
+        "messaging/conversations/<int:pk>/read/",
+        views.ConversationReadView.as_view(),
+        name="messaging-read",
+    ),
+    path(
+        "messaging/conversations/<int:pk>/typing/",
+        views.TypingView.as_view(),
+        name="messaging-typing",
+    ),
+    path("messaging/search/", views.MessageSearchView.as_view(), name="messaging-search"),
+    path(
+        "messaging/summary/",
+        views.MessagingSummaryView.as_view(),
+        name="messaging-summary",
+    ),
+    path(
+        "messaging/settings/",
+        views.MessagingSettingsView.as_view(),
+        name="messaging-settings",
+    ),
+    path(
+        "messaging/group-chat-requests/",
+        views.GroupChatRequestListCreateView.as_view(),
+        name="messaging-group-chat-requests",
+    ),
+    path(
+        "messaging/group-chat-requests/<int:pk>/<str:decision>/",
+        views.GroupChatRequestDecisionView.as_view(),
+        name="messaging-group-chat-request-decision",
+    ),
+    path(
+        "messaging/admin/group-chats/",
+        views.AdminGroupChatListView.as_view(),
+        name="messaging-admin-group-chats",
+    ),
+    path(
+        "messaging/admin/group-chats/<int:pk>/",
+        views.AdminGroupChatView.as_view(),
+        name="messaging-admin-group-chat",
+    ),
+    path(
+        "messaging/unit-group/members/",
+        views.UnitGroupMembersView.as_view(),
+        name="messaging-unit-group-members",
+    ),
+    path(
+        "messaging/unit-group/<int:pk>/members/<int:user_id>/",
+        views.UnitGroupMemberView.as_view(),
+        name="messaging-unit-group-member",
+    ),
+    path(
+        "messaging/push/config/",
+        views.PushConfigView.as_view(),
+        name="messaging-push-config",
+    ),
+    path(
+        "messaging/push/subscribe/",
+        views.PushSubscribeView.as_view(),
+        name="messaging-push-subscribe",
+    ),
+    path(
+        "messaging/push/unsubscribe/",
+        views.PushUnsubscribeView.as_view(),
+        name="messaging-push-unsubscribe",
+    ),
+]

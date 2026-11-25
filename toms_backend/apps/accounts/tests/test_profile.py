@@ -660,7 +660,7 @@ def test_super_administrator_cannot_move_itself(api, login, seat_admin):
     )
     assert response.status_code == 400
     body = response.json()
-    assert "Super Administrator" in str(body["errors"]["unit_id"]), body
+    assert "Administrator" in str(body["errors"]["unit_id"]), body
 
     seat_admin.refresh_from_db()
     assert seat_admin.authority == "Administrator"

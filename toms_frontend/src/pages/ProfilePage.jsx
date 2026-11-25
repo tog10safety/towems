@@ -22,7 +22,7 @@ import { formatDateTime } from "../utils/format.js";
  *
  * Only the fields the backend declares editable are rendered as inputs. Role and
  * status stay read-only. Unit is selectable, but the change is only a request:
- * an Administrator or the Super Administrator approves it through the bell, and
+ * an Administrator approves it through the bell, and
  * the server applies it then. Approval ends every post held in the unit being
  * left and leaves the account with the Creator role only in the new one.
  */
@@ -74,7 +74,7 @@ function blankProfileForm(data) {
 }
 
 export default function ProfilePage() {
-  const { refresh, permissions } = useAuth();
+  const { refresh } = useAuth();
   const navigate = useNavigate();
   const { data, loading, error, reload, setData } = useApi("/auth/profile/");
   // The unit register is readable by every authenticated account, so the move
@@ -132,7 +132,7 @@ export default function ProfilePage() {
 
     // A unit move is destructive and needs approval, so it is confirmed before
     // anything is sent. The server records a request; the unit does not change
-    // until an Administrator or the Super Administrator approves it.
+    // until an Administrator approves it.
     const unitChanged =
       form.unit_id && String(form.unit_id) !== String(data.unit_id ?? "");
     if (unitChanged) {
@@ -140,7 +140,7 @@ export default function ProfilePage() {
       const label = target ? `${target.acronym} - ${target.name}` : "the selected unit";
       const confirmed = window.confirm(
         `Send a request to move to ${label}?\n\n` +
-          "An Administrator or the Super Administrator must approve it. If " +
+          "An Administrator must approve it. If " +
           "approved, every post you hold in your current unit will be ended, " +
           "including office and section assignments and any acting authority.\n\n" +
           "In the new unit you will hold no post: only the Creator role. An " +
@@ -162,7 +162,7 @@ export default function ProfilePage() {
       setData(updated);
       if (unitChanged) {
         setNotice(
-          "Unit change request sent. An Administrator or the Super Administrator " +
+          "Unit change request sent. An Administrator " +
             "must approve it before your unit changes; your posts stay as they are " +
             "until then."
         );
@@ -285,13 +285,9 @@ export default function ProfilePage() {
             permissions are managed by an administrator.
           </p>
         </div>
-        {/* The Super Administrator's role is red so the seat is recognisable
-            at a glance; every other account keeps the blue role badge. */}
-        {data && (
-          <Badge tone={permissions.is_system_owner ? "danger" : "info"}>
-            {data.authority}
-          </Badge>
-        )}
+        {/* Every account's role uses the same badge; holding the seat is not
+            singled out here. */}
+        {data && <Badge tone="info">{data.authority}</Badge>}
       </div>
 
       <ErrorBanner message={error || actionError} onRetry={error ? reload : undefined} />
@@ -305,8 +301,8 @@ export default function ProfilePage() {
             <strong>
               {pendingUnitChange.to_unit_acronym} - {pendingUnitChange.to_unit_name}
             </strong>{" "}
-            on {formatDateTime(pendingUnitChange.created_at)}. An Administrator or the
-            Super Administrator must approve it. Until then you remain in{" "}
+            on {formatDateTime(pendingUnitChange.created_at)}. An Administrator must
+            approve it. Until then you remain in{" "}
             {data.unit_acronym || data.unit_name || "your current unit"} and keep
             every post you hold.
           </p>
@@ -418,7 +414,7 @@ export default function ProfilePage() {
                   label="Unit"
                   className="span-2"
                   error={fieldErrors.unit_id}
-                  hint="Changing unit needs approval from an Administrator or the Super Administrator. Once approved, every post you hold in your current unit ends, including office/section assignments, and you keep the Creator role only in the new one."
+                  hint="Changing unit needs approval from an Administrator. Once approved, every post you hold in your current unit ends, including office/section assignments, and you keep the Creator role only in the new one."
                 >
                   <Select
                     value={form.unit_id}
