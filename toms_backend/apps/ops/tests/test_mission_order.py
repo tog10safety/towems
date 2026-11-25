@@ -232,28 +232,56 @@ def test_a_signed_order_keeps_the_post_its_signer_held(planned_mission):
     )
     mission.refresh_from_db()
 
+    original_name = " ".join(
+        part
+        for part in (
+            commander.first_name,
+            commander.middle_name,
+            commander.last_name,
+        )
+        if part
+    )
+
     mission_order_workflow.approve(mission, actor=commander, note="Signed.")
     mission.refresh_from_db()
 
     assert mission.mission_order_signer_designation == "Squadron Commander"
     assert mission.mission_order_signer_as_commander is True
+    assert mission.mission_order_signer_name == original_name
+    assert mission.mission_order_signer_rank == "Lt Col"
+    assert mission.mission_order_signer_branch == "PAF"
 
-    # The signer is moved to another unit and loses the appointment afterwards.
+    # The signer is moved to another unit, promoted and renamed afterwards.
     UnitAppointment.objects.filter(unit=mission.unit, user=commander).update(
         is_active=False, ended_at=timezone.now()
     )
+    commander.first_name = "Renamed"
+    commander.rank = "Gen"
+    commander.branch_of_service = "PAA"
     commander.designation = "Personnel"
     commander.unit = make_unit()
-    commander.save(update_fields=["designation", "unit"])
+    commander.save(
+        update_fields=[
+            "first_name",
+            "rank",
+            "branch_of_service",
+            "designation",
+            "unit",
+        ]
+    )
     mission.refresh_from_db()
 
-    assert mission_order_pdf.signature_block(mission, commander) == (
-        "Squadron Commander",
-        True,
-    )
-    assert mission_order_workflow.state(mission)["signatory_designation"] == (
-        "Squadron Commander"
-    )
+    block = mission_order_pdf.signature_block(mission, commander)
+    assert block["designation"] == "Squadron Commander"
+    assert block["as_commander"] is True
+    assert block["name"] == original_name
+    assert block["rank"] == "Lt Col"
+    assert block["branch"] == "PAF"
+
+    state = mission_order_workflow.state(mission)
+    assert state["signatory_designation"] == "Squadron Commander"
+    assert state["signatory_name"] == original_name
+    assert state["signatory_rank"] == "Lt Col"
 
     fitz = pytest.importorskip("fitz")
 
@@ -263,6 +291,9 @@ def test_a_signed_order_keeps_the_post_its_signer_held(planned_mission):
 
     assert "FOR THE" not in text
     assert "Squadron Commander" in text
+    assert original_name.upper() in text
+    assert "RENAMED" not in text
+    assert "PAA" not in text
 
 
 def test_backfill_reconstructs_a_signed_orders_block(planned_mission):
@@ -310,10 +341,26 @@ def test_backfill_reconstructs_a_signed_orders_block(planned_mission):
     editor = _Editor()
     editor.connection = connection
     backfill.record_signed_blocks(django_apps, editor)
+    identity = importlib.import_module(
+        "apps.ops.migrations.0055_mission_order_signer_identity"
+    )
+    identity.record_signed_signer_identity(django_apps, editor)
 
     mission.refresh_from_db()
     assert mission.mission_order_signer_designation == "Squadron Commander"
     assert mission.mission_order_signer_as_commander is True
+    expected_name = " ".join(
+        part
+        for part in (
+            commander.first_name,
+            commander.middle_name,
+            commander.last_name,
+        )
+        if part
+    )
+    assert mission.mission_order_signer_name == expected_name
+    assert mission.mission_order_signer_rank == "Lt Col"
+    assert mission.mission_order_signer_branch == "PAF"
 
 
 def test_resetting_the_order_clears_the_recorded_signature_block(planned_mission):
@@ -322,11 +369,17 @@ def test_resetting_the_order_clears_the_recorded_signature_block(planned_mission
     mission = planned_mission
     mission.mission_order_signer_designation = "Squadron Commander"
     mission.mission_order_signer_as_commander = True
+    mission.mission_order_signer_name = "Juan Dela Cruz"
+    mission.mission_order_signer_rank = "Lt Col"
+    mission.mission_order_signer_branch = "PAF"
 
     mission_order_workflow.reset(mission)
 
     assert mission.mission_order_signer_designation == ""
     assert mission.mission_order_signer_as_commander is False
+    assert mission.mission_order_signer_name == ""
+    assert mission.mission_order_signer_rank == ""
+    assert mission.mission_order_signer_branch == ""
 
 
 def test_signature_designation_uses_mission_authority_role(planned_mission):

@@ -339,30 +339,41 @@ def _signer_designation(mission, signer, *, as_commander=None):
     return (signer.designation or "").strip()
 
 
-def signature_block(mission, signer):
-    """Return ``(designation, signing_as_commander)`` for the order.
+def signature_block(mission, signer) -> dict:
+    """The signature block as it is printed on the order.
 
-    A signed order is a record of the day it was signed, so its signature block
-    is served from what was recorded then. Before signature it follows the
-    signer's current appointment and profile.
+    A signed order is a record of the day it was signed, so every part of its
+    block - name, rank, branch and post - is served from what was recorded
+    then. Before signature it follows the signer's current record.
     """
     if _has_recorded_signature_block(mission):
-        return (
-            mission.mission_order_signer_designation,
-            bool(mission.mission_order_signer_as_commander),
-        )
+        return {
+            "name": mission.mission_order_signer_name,
+            "rank": mission.mission_order_signer_rank,
+            "branch": mission.mission_order_signer_branch,
+            "designation": mission.mission_order_signer_designation,
+            "as_commander": bool(mission.mission_order_signer_as_commander),
+        }
     as_commander = _signing_as_commander(mission, signer)
-    designation = _signer_designation(mission, signer, as_commander=as_commander)
-    return designation, as_commander
+    return {
+        "name": _person_name(signer) if signer is not None else "",
+        "rank": (getattr(signer, "rank", "") or "").strip(),
+        "branch": (getattr(signer, "branch_of_service", "") or "").strip(),
+        "designation": _signer_designation(
+            mission, signer, as_commander=as_commander
+        ),
+        "as_commander": as_commander,
+    }
 
 
 def _has_recorded_signature_block(mission) -> bool:
-    """Whether this order carries the post recorded when it was signed."""
+    """Whether this order carries the block recorded when it was signed."""
     return bool(
         mission.mission_order_signed_at is not None
         and (
             mission.mission_order_signer_designation
             or mission.mission_order_signer_as_commander
+            or mission.mission_order_signer_name
         )
     )
 
@@ -950,7 +961,9 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
     commander_title = COMMANDER_TITLES.get(unit.category, "COMMANDER")
     # A commander signs in their own right; the order is not signed "for" them.
     # Once signed, the block is the one recorded at signature, not today's.
-    designation, signing_as_commander = signature_block(mission, signer)
+    block = signature_block(mission, signer)
+    designation = block["designation"]
+    signing_as_commander = block["as_commander"]
     issued = mission.created_at or timezone.now()
     order_number = _order_number(mission)
     if not verification_url:
@@ -1100,10 +1113,10 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
 
     signer_rows = []
     if signer is not None:
-        name_text = _person_name(signer).replace("\ufffd", "?").upper()
+        name_text = block["name"].replace("\ufffd", "?").upper()
         name_width = max(pdfmetrics.stringWidth(name_text, FONT_BOLD, 12), 1)
-        rank = (signer.rank or "").strip()
-        branch = (signer.branch_of_service or "").strip()
+        rank = (block["rank"] or "").strip()
+        branch = (block["branch"] or "").strip()
         signer_rows.append(
             [
                 _SignatureOverlay(

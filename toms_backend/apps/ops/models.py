@@ -283,6 +283,18 @@ class Mission(TimestampedModel):
         max_length=120, blank=True, default=""
     )
     mission_order_signer_as_commander = models.BooleanField(default=False)
+    #: The signer's name, rank and branch as printed on the signed document.
+    #: Frozen with the post so a later promotion or name correction cannot
+    #: rewrite an order that has already been signed.
+    mission_order_signer_name = models.CharField(
+        max_length=200, blank=True, default=""
+    )
+    mission_order_signer_rank = models.CharField(
+        max_length=50, blank=True, default=""
+    )
+    mission_order_signer_branch = models.CharField(
+        max_length=100, blank=True, default=""
+    )
 
     class Meta:
         db_table = "ops_mission"

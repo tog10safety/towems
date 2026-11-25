@@ -147,6 +147,9 @@ def reset(mission, *, save=True):
     mission.mission_order_signed_revision = 0
     mission.mission_order_signer_designation = ""
     mission.mission_order_signer_as_commander = False
+    mission.mission_order_signer_name = ""
+    mission.mission_order_signer_rank = ""
+    mission.mission_order_signer_branch = ""
     if save:
         mission.save(
             update_fields=[
@@ -158,6 +161,9 @@ def reset(mission, *, save=True):
                 "mission_order_signed_revision",
                 "mission_order_signer_designation",
                 "mission_order_signer_as_commander",
+                "mission_order_signer_name",
+                "mission_order_signer_rank",
+                "mission_order_signer_branch",
                 "updated_at",
             ]
         )
@@ -184,6 +190,9 @@ def release_for_signature(mission, *, actor, request=None):
     mission.mission_order_signed_revision = 0
     mission.mission_order_signer_designation = ""
     mission.mission_order_signer_as_commander = False
+    mission.mission_order_signer_name = ""
+    mission.mission_order_signer_rank = ""
+    mission.mission_order_signer_branch = ""
     mission.save(
         update_fields=[
             "mission_order_signatory",
@@ -195,6 +204,9 @@ def release_for_signature(mission, *, actor, request=None):
             "mission_order_signed_revision",
             "mission_order_signer_designation",
             "mission_order_signer_as_commander",
+            "mission_order_signer_name",
+            "mission_order_signer_rank",
+            "mission_order_signer_branch",
             "updated_at",
         ]
     )
@@ -249,6 +261,15 @@ def approve(mission, *, actor, note: str = "", request=None):
         or ""
     )[:120]
     locked.mission_order_signer_as_commander = as_commander
+    # Name, rank and branch are part of the document too: a promotion or a
+    # corrected name afterwards must not change what was signed.
+    locked.mission_order_signer_name = (
+        mission_order_pdf._person_name(actor) or ""
+    )[:200]
+    locked.mission_order_signer_rank = (actor.rank or "").strip()[:50]
+    locked.mission_order_signer_branch = (
+        actor.branch_of_service or ""
+    ).strip()[:100]
     locked.save(
         update_fields=[
             "mission_order_status",
@@ -258,6 +279,9 @@ def approve(mission, *, actor, note: str = "", request=None):
             "mission_order_signed_revision",
             "mission_order_signer_designation",
             "mission_order_signer_as_commander",
+            "mission_order_signer_name",
+            "mission_order_signer_rank",
+            "mission_order_signer_branch",
             "updated_at",
         ]
     )
@@ -323,8 +347,16 @@ def state(mission, user=None) -> dict:
         "status": status,
         "label": label,
         "signatory_id": getattr(signatory, "id", None),
-        "signatory_name": _signatory_name(mission),
-        "signatory_rank": getattr(signatory, "rank", "") if signatory else "",
+        "signatory_name": (
+            mission.mission_order_signer_name
+            if mission_order_pdf._has_recorded_signature_block(mission)
+            else _signatory_name(mission)
+        ),
+        "signatory_rank": (
+            mission.mission_order_signer_rank
+            if mission_order_pdf._has_recorded_signature_block(mission)
+            else (getattr(signatory, "rank", "") if signatory else "")
+        ),
         # A signed order shows the post recorded at signature, not the roster's.
         "signatory_designation": (
             mission.mission_order_signer_designation
