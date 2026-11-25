@@ -265,6 +265,57 @@ def test_a_signed_order_keeps_the_post_its_signer_held(planned_mission):
     assert "Squadron Commander" in text
 
 
+def test_backfill_reconstructs_a_signed_orders_block(planned_mission):
+    """The 0054 data step reads the post held on the signature date.
+
+    It runs before the live roster is consulted, so a commander whose
+    appointment has since ended still gets the post they signed under.
+    """
+    import importlib
+
+    from django.apps import apps as django_apps
+    from django.db import connection
+
+    from apps.command.models import UnitAppointment
+    from apps.core.roles import ROLE_COMMANDER
+
+    mission = planned_mission
+    commander = make_user(unit=mission.unit, authority="Creator", rank="Lt Col")
+    appointment = UnitAppointment.objects.create(
+        unit=mission.unit, user=commander, role=ROLE_COMMANDER
+    )
+    UnitAppointment.objects.filter(pk=appointment.pk).update(
+        created_at=dt.datetime(2026, 11, 24, 10, 40),
+        is_active=False,
+        ended_at=dt.datetime(2026, 11, 25, 14, 49),
+    )
+    Mission.objects.filter(pk=mission.pk).update(
+        mission_order_status=Mission.MISSION_ORDER_APPROVED,
+        mission_order_signed_at=dt.datetime(2026, 11, 24, 11, 5),
+        mission_order_signed_by=commander,
+        mission_order_signatory=commander,
+        mission_order_signer_designation="",
+        mission_order_signer_as_commander=False,
+    )
+    commander.designation = "Personnel"
+    commander.save(update_fields=["designation"])
+
+    backfill = importlib.import_module(
+        "apps.ops.migrations.0054_mission_order_signature_block"
+    )
+
+    class _Editor:
+        pass
+
+    editor = _Editor()
+    editor.connection = connection
+    backfill.record_signed_blocks(django_apps, editor)
+
+    mission.refresh_from_db()
+    assert mission.mission_order_signer_designation == "Squadron Commander"
+    assert mission.mission_order_signer_as_commander is True
+
+
 def test_resetting_the_order_clears_the_recorded_signature_block(planned_mission):
     from apps.ops import mission_order_workflow
 

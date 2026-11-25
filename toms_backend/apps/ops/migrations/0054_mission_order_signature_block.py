@@ -61,11 +61,7 @@ def record_signed_blocks(apps, schema_editor):
             )
             .exists()
         )
-        signer = (
-            User.objects.filter(pk=signer_id)
-            .only("designation", "unit_id")
-            .first()
-        )
+        signer = User.objects.filter(pk=signer_id).first()
         if (
             not as_commander
             and signer is not None
