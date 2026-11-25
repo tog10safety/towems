@@ -1039,6 +1039,8 @@ def assign_authority(
             "mission_order_signed_by",
             "mission_order_note",
             "mission_order_signed_revision",
+            "mission_order_signer_designation",
+            "mission_order_signer_as_commander",
             "updated_at",
         ]
     )

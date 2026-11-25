@@ -276,6 +276,13 @@ class Mission(TimestampedModel):
     #: The mission revision the signature covers. A later material change makes
     #: the order stale even if the approval record itself still says approved.
     mission_order_signed_revision = models.PositiveIntegerField(default=0)
+    #: The signature block as it stood on the day the order was signed. A signed
+    #: order is a record, not a live view of the roster: moving the signer to
+    #: another post or unit must not rewrite the document they signed.
+    mission_order_signer_designation = models.CharField(
+        max_length=120, blank=True, default=""
+    )
+    mission_order_signer_as_commander = models.BooleanField(default=False)
 
     class Meta:
         db_table = "ops_mission"

@@ -339,6 +339,34 @@ def _signer_designation(mission, signer, *, as_commander=None):
     return (signer.designation or "").strip()
 
 
+def signature_block(mission, signer):
+    """Return ``(designation, signing_as_commander)`` for the order.
+
+    A signed order is a record of the day it was signed, so its signature block
+    is served from what was recorded then. Before signature it follows the
+    signer's current appointment and profile.
+    """
+    if _has_recorded_signature_block(mission):
+        return (
+            mission.mission_order_signer_designation,
+            bool(mission.mission_order_signer_as_commander),
+        )
+    as_commander = _signing_as_commander(mission, signer)
+    designation = _signer_designation(mission, signer, as_commander=as_commander)
+    return designation, as_commander
+
+
+def _has_recorded_signature_block(mission) -> bool:
+    """Whether this order carries the post recorded when it was signed."""
+    return bool(
+        mission.mission_order_signed_at is not None
+        and (
+            mission.mission_order_signer_designation
+            or mission.mission_order_signer_as_commander
+        )
+    )
+
+
 def _signature_path(user):
     if user is None or not getattr(user, "signature_filename", ""):
         return None
@@ -921,7 +949,8 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
     signer = _signer_for(mission)
     commander_title = COMMANDER_TITLES.get(unit.category, "COMMANDER")
     # A commander signs in their own right; the order is not signed "for" them.
-    signing_as_commander = _signing_as_commander(mission, signer)
+    # Once signed, the block is the one recorded at signature, not today's.
+    designation, signing_as_commander = signature_block(mission, signer)
     issued = mission.created_at or timezone.now()
     order_number = _order_number(mission)
     if not verification_url:
@@ -1118,9 +1147,6 @@ def generate_mission_order_pdf(mission, *, verification_url=None) -> bytes:
             rank_row.hAlign = "LEFT"
             signer_rows.append([rank_row])
 
-        designation = _signer_designation(
-            mission, signer, as_commander=signing_as_commander
-        )
         if designation:
             signer_rows.append(
                 [Paragraph(_text(designation), _style("signature_regular"))]

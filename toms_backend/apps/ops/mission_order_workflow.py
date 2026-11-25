@@ -145,6 +145,8 @@ def reset(mission, *, save=True):
     mission.mission_order_signed_by = None
     mission.mission_order_note = ""
     mission.mission_order_signed_revision = 0
+    mission.mission_order_signer_designation = ""
+    mission.mission_order_signer_as_commander = False
     if save:
         mission.save(
             update_fields=[
@@ -154,6 +156,8 @@ def reset(mission, *, save=True):
                 "mission_order_signed_by",
                 "mission_order_note",
                 "mission_order_signed_revision",
+                "mission_order_signer_designation",
+                "mission_order_signer_as_commander",
                 "updated_at",
             ]
         )
@@ -178,6 +182,8 @@ def release_for_signature(mission, *, actor, request=None):
     mission.mission_order_signed_by = None
     mission.mission_order_note = ""
     mission.mission_order_signed_revision = 0
+    mission.mission_order_signer_designation = ""
+    mission.mission_order_signer_as_commander = False
     mission.save(
         update_fields=[
             "mission_order_signatory",
@@ -187,6 +193,8 @@ def release_for_signature(mission, *, actor, request=None):
             "mission_order_signed_by",
             "mission_order_note",
             "mission_order_signed_revision",
+            "mission_order_signer_designation",
+            "mission_order_signer_as_commander",
             "updated_at",
         ]
     )
@@ -222,12 +230,25 @@ def approve(mission, *, actor, note: str = "", request=None):
             "approved and the order routed to its signatory first."
         )
 
+    from apps.ops import mission_order_pdf
+
+    # The signature block belongs to the signed document: record the post the
+    # signer holds today, so a later reassignment or appointment change cannot
+    # rewrite an order that has already been signed.
+    as_commander = mission_order_pdf._signing_as_commander(locked, actor)
     note = (note or "").strip()
     locked.mission_order_status = Mission.MISSION_ORDER_APPROVED
     locked.mission_order_signed_at = timezone.now()
     locked.mission_order_signed_by = actor
     locked.mission_order_note = note
     locked.mission_order_signed_revision = locked.revision
+    locked.mission_order_signer_designation = (
+        mission_order_pdf._signer_designation(
+            locked, actor, as_commander=as_commander
+        )
+        or ""
+    )[:120]
+    locked.mission_order_signer_as_commander = as_commander
     locked.save(
         update_fields=[
             "mission_order_status",
@@ -235,6 +256,8 @@ def approve(mission, *, actor, note: str = "", request=None):
             "mission_order_signed_by",
             "mission_order_note",
             "mission_order_signed_revision",
+            "mission_order_signer_designation",
+            "mission_order_signer_as_commander",
             "updated_at",
         ]
     )
@@ -294,14 +317,19 @@ def state(mission, user=None) -> dict:
     )
     if stale:
         label = "Signature stale"
+    from apps.ops import mission_order_pdf
+
     return {
         "status": status,
         "label": label,
         "signatory_id": getattr(signatory, "id", None),
         "signatory_name": _signatory_name(mission),
         "signatory_rank": getattr(signatory, "rank", "") if signatory else "",
+        # A signed order shows the post recorded at signature, not the roster's.
         "signatory_designation": (
-            getattr(signatory, "designation", "") if signatory else ""
+            mission.mission_order_signer_designation
+            if mission_order_pdf._has_recorded_signature_block(mission)
+            else (getattr(signatory, "designation", "") if signatory else "")
         ),
         "assigned_at": mission.mission_order_assigned_at,
         "signed_at": mission.mission_order_signed_at,

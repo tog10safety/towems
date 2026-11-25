@@ -206,6 +206,78 @@ def test_a_deputy_still_signs_for_the_commander(planned_mission):
     assert mission_order_pdf._signing_as_commander(mission, deputy) is False
 
 
+def test_a_signed_order_keeps_the_post_its_signer_held(planned_mission):
+    """Signing records the post; a later reassignment cannot rewrite it.
+
+    This is the production case: a Group Commander signed an order and was
+    afterwards moved to Personnel and another unit. The signed order must keep
+    the commander's block, and no "FOR THE ..." line.
+    """
+    from django.utils import timezone
+
+    from apps.command.models import UnitAppointment
+    from apps.core.factories import make_unit
+    from apps.core.roles import ROLE_COMMANDER
+    from apps.ops import mission_order_workflow
+
+    mission = planned_mission
+    commander = make_user(unit=mission.unit, authority="Creator", rank="Lt Col")
+    UnitAppointment.objects.create(
+        unit=mission.unit, user=commander, role=ROLE_COMMANDER
+    )
+    Mission.objects.filter(pk=mission.pk).update(
+        approval_status=Mission.APPROVAL_APPROVED,
+        mission_order_status=Mission.MISSION_ORDER_AWAITING_SIGNATURE,
+        mission_order_signatory=commander,
+    )
+    mission.refresh_from_db()
+
+    mission_order_workflow.approve(mission, actor=commander, note="Signed.")
+    mission.refresh_from_db()
+
+    assert mission.mission_order_signer_designation == "Squadron Commander"
+    assert mission.mission_order_signer_as_commander is True
+
+    # The signer is moved to another unit and loses the appointment afterwards.
+    UnitAppointment.objects.filter(unit=mission.unit, user=commander).update(
+        is_active=False, ended_at=timezone.now()
+    )
+    commander.designation = "Personnel"
+    commander.unit = make_unit()
+    commander.save(update_fields=["designation", "unit"])
+    mission.refresh_from_db()
+
+    assert mission_order_pdf.signature_block(mission, commander) == (
+        "Squadron Commander",
+        True,
+    )
+    assert mission_order_workflow.state(mission)["signatory_designation"] == (
+        "Squadron Commander"
+    )
+
+    fitz = pytest.importorskip("fitz")
+
+    pdf = mission_order_pdf.generate_mission_order_pdf(mission)
+    with fitz.open(stream=pdf, filetype="pdf") as document:
+        text = " ".join(" ".join(page.get_text().split()) for page in document)
+
+    assert "FOR THE" not in text
+    assert "Squadron Commander" in text
+
+
+def test_resetting_the_order_clears_the_recorded_signature_block(planned_mission):
+    from apps.ops import mission_order_workflow
+
+    mission = planned_mission
+    mission.mission_order_signer_designation = "Squadron Commander"
+    mission.mission_order_signer_as_commander = True
+
+    mission_order_workflow.reset(mission)
+
+    assert mission.mission_order_signer_designation == ""
+    assert mission.mission_order_signer_as_commander is False
+
+
 def test_signature_designation_uses_mission_authority_role(planned_mission):
     signer = planned_mission.approving_authority
     signer.designation = "Personnel"
