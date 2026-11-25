@@ -311,6 +311,47 @@ DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.pr
   python toms_backend/manage.py verify_legacy_mapping
 ```
 
+**Release 6929c7e gate — group-chat routing threads.** Migration
+`messaging/0007_backfill_group_chat_routing_threads` backfills every request whose
+`thread_id` is null. After step 3, and after the release's service restart (so an old
+worker cannot still create a request without a thread), count the requests and the
+requests that now have a `group_request` routing thread:
+
+```bash
+DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.prod \
+  venv/bin/python toms_backend/manage.py shell -c "
+from apps.messaging.models import GroupChatRequest
+
+requests = GroupChatRequest.objects.count()
+routed = GroupChatRequest.objects.filter(
+    thread__isnull=False, thread__kind='group_request'
+).count()
+missing = GroupChatRequest.objects.filter(thread__isnull=True).count()
+wrong_kind = (
+    GroupChatRequest.objects.filter(thread__isnull=False)
+    .exclude(thread__kind='group_request')
+    .count()
+)
+print(
+    f'group chat requests={requests} routed={routed} '
+    f'missing_thread={missing} wrong_thread_kind={wrong_kind}'
+)
+if requests != routed or missing or wrong_kind:
+    raise SystemExit(
+        'STOP: migration 0007 did not create exactly one group_request routing '
+        'thread per group chat request; do not announce the release.'
+    )
+"
+```
+
+`requests` is the full request count when the check runs: the pre-existing requests that
+0007 had to backfill plus any created during the rollout. The counts must satisfy
+`requests == routed` with `missing_thread=0` and `wrong_thread_kind=0`; on a first
+messaging deployment both counts are `0`. **Stop condition:** any other result, or a
+non-zero exit from the command, means 0007 did not cover every request. Stop the release,
+preserve the output, and investigate or restore the verified backup from section 2 — do
+not restart, upload, or announce the release until the check passes.
+
 Post-conditions to confirm: row counts of `users`, `units`, `hazard_registry`, `mrm_forms`,
 `mission_hazards`, `mrm_personnel`, `mrm_feedback`, `feedback_notifications`,
 `user_activities`, `unit_assignments`, `unit_logos` are **identical before and after**;
