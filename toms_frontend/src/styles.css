@@ -146,8 +146,14 @@ h2 {
 }
 
 .sidebar {
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
+  /* The rail wears the login form's air-force blue, gradient and all. */
+  background: linear-gradient(
+    165deg,
+    var(--login-identity-from) 0%,
+    var(--login-identity-to) 100%
+  );
+  border-right: 1px solid var(--login-identity-border);
+  color: var(--login-identity-text);
   display: flex;
   flex-direction: column;
   padding: 18px 12px;
@@ -215,11 +221,64 @@ h2 {
 
 .sidebar-foot {
   margin-top: auto;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--login-identity-border);
   padding-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Everything inside the blue rail uses the identity panel's light palette, so
+   it stays readable in both themes instead of following the page's text and
+   hover colours. */
+.sidebar .brand {
+  border-bottom-color: var(--login-identity-border);
+}
+
+.sidebar .brand-mark {
+  color: var(--login-identity-text);
+}
+
+.sidebar .brand-sub,
+.sidebar .nav-item,
+.sidebar .nav-group-label,
+.sidebar .user-handle {
+  color: var(--login-identity-muted);
+}
+
+.sidebar .nav-group-label {
+  opacity: 1;
+}
+
+.sidebar .nav-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--login-identity-text);
+}
+
+.sidebar .nav-item.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--login-identity-text);
+}
+
+.sidebar .user-avatar {
+  color: var(--login-identity-text);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--login-identity-rule);
+}
+
+.sidebar .badge {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--login-identity-rule);
+  color: var(--login-identity-text);
+}
+
+.sidebar .btn-ghost {
+  border-color: var(--login-identity-rule);
+  color: var(--login-identity-text);
+}
+
+.sidebar .btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .user-chip {
