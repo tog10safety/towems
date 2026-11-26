@@ -988,15 +988,16 @@ def mark_read(conversation, viewer, up_to_id=None) -> int:
         member.last_read_at = now
         member.save(update_fields=["last_read_message_id", "last_read_at"])
 
-    if not conversation.is_group():
-        # The bell's notice for this thread has now been acted on.
-        Notification.objects.filter(
-            recipient_id=viewer.id,
-            category="message",
-            related_type="conversation",
-            related_id=str(conversation.id),
-            is_read=False,
-        ).update(is_read=True, read_at=now)
+    # The bell's notice for this thread has now been acted on - for a group as
+    # much as for a private chat, or an unread notice would keep the phone's
+    # icon lit after the conversation had been read.
+    Notification.objects.filter(
+        recipient_id=viewer.id,
+        category="message",
+        related_type="conversation",
+        related_id=str(conversation.id),
+        is_read=False,
+    ).update(is_read=True, read_at=now)
     return updated
 
 

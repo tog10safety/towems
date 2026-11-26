@@ -7714,10 +7714,18 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
                 for row in base.filter(id__gt=since, is_read=False).order_by("id")[:10]
             ]
 
+        # One notice per thread means a second message in the same chat adds no
+        # row a phone could see, so the phone is also told how many messages are
+        # waiting: an increase in this number is what makes it buzz again.
+        from apps.messaging.services import inbox_unread_total
+
+        unread_messages = inbox_unread_total(request.user)
+
         return Response(
             {
                 "latest_id": latest_id,
                 "unread": base.filter(is_read=False).count(),
+                "unread_messages": unread_messages,
                 "pending_actions": base.filter(
                     requires_action=True,
                     action_status__in=[

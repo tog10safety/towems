@@ -310,3 +310,52 @@ def test_retention_deletes_only_messages_past_the_window(unit, as_user):
     assert audit.after["deleted"] == 1
     # The audit records the count, never the text.
     assert "retire me" not in audit.note
+
+
+def test_pulse_counts_every_unread_message_not_just_one_per_thread(unit, as_user):
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    conversation = conversation_id(as_user, sender, recipient)
+    sender_client = as_user(sender)
+
+    send(sender_client, conversation, "one")
+    first = as_user(recipient).get("/api/notifications/pulse/?since=1").json()
+    assert first["unread_messages"] == 1
+
+    send(sender_client, conversation, "two")
+    second = as_user(recipient).get("/api/notifications/pulse/?since=1").json()
+    # The bell keeps a single notice for the thread, so ``items`` shows nothing
+    # new; the message count is what tells the phone a second one arrived.
+    assert second["unread"] == 1
+    assert second["unread_messages"] == 2
+
+
+def test_reading_a_group_chat_clears_its_bell_notice(unit, as_user):
+    from apps.messaging import services
+
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    group = services.ensure_unit_group(sender, create=True)
+
+    from apps.ops.notifications import notify
+
+    response = send(as_user(sender), group.id, "morning all")
+    assert response.status_code in (200, 201), response.content
+
+    # A group send does not write a bell notice on its own; this is the notice
+    # shape it writes elsewhere, and reading the thread must clear it.
+    notice = notify(
+        recipient,
+        title="New message from a teammate",
+        message="Open Messages to read it.",
+        category="message",
+        related=("conversation", group.id),
+        actor=sender,
+        priority="normal",
+        action_url=f"/messages?conversation={group.id}",
+    )
+    as_user(recipient).post(
+        f"/api/messaging/conversations/{group.id}/read/", {}, format="json"
+    )
+    notice.refresh_from_db()
+    assert notice.is_read is True

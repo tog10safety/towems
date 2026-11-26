@@ -95,6 +95,9 @@ public class AlertService extends Service {
     private static final int TEST_NOTIFICATION_ID = 1003;
     private static final int SUMMARY_NOTIFICATION_ID = 1004;
 
+    /** One stack per account in the shade, the way a chat app groups its threads. */
+    private static final String GROUP_ALERTS = "towems_alerts";
+
     /** MainActivity keeps this true while a TOWEMS screen is visible. */
     public static volatile boolean appVisible = false;
 
@@ -313,8 +316,18 @@ public class AlertService extends Service {
         int unread = pulse.has("unread")
                 ? pulse.optInt("unread", 0)
                 : (urgent == null ? 0 : urgent.length());
-        showUnreadSummary(unread);
-        if (!firstRun && !appVisible && urgent != null) {
+        // How many messages wait, not how many notices about them exist: the
+        // bell keeps one notice per thread, so a second message in the same chat
+        // adds no row this phone could see. -1 means a server that predates it.
+        int messages = pulse.has("unread_messages")
+                ? pulse.optInt("unread_messages", 0)
+                : -1;
+        int waiting = Math.max(unread, Math.max(messages, 0));
+        showUnreadSummary(waiting);
+        // Posted even while a TOWEMS screen is open: a chat app buzzes wherever
+        // you are, and the in-app bell is only visible on its own page.
+        boolean messageBanner = false;
+        if (!firstRun && urgent != null) {
             for (int index = 0; index < urgent.length(); index += 1) {
                 JSONObject row = urgent.optJSONObject(index);
                 if (row == null) {
@@ -325,7 +338,18 @@ public class AlertService extends Service {
                     continue;
                 }
                 seen.add(id);
-                showAlert(row, unread);
+                messageBanner |= "message".equals(row.optString("category", ""));
+                showAlert(row, waiting);
+            }
+        }
+        if (messages >= 0) {
+            int previous = prefs.getInt("messages_unread", -1);
+            prefs.edit().putInt("messages_unread", messages).apply();
+            // The row above already announced the first message of a thread, so
+            // only the messages it did not stand for are worth another buzz.
+            int extra = messages - Math.max(previous, 0) - (messageBanner ? 1 : 0);
+            if (!firstRun && previous >= 0 && extra > 0) {
+                showIncomingMessages(extra, waiting);
             }
         }
         // The first poll only establishes a baseline: opening the app for the
@@ -389,7 +413,7 @@ public class AlertService extends Service {
      * is "Open Messages to read it.", so nothing from the conversation itself
      * ever reaches the lock screen.
      */
-    private void showAlert(JSONObject row, int unread) {
+    private void showAlert(JSONObject row, int waiting) {
         String title = row.optString("title", "TOWEMS");
         String message = row.optString("message", "");
         String path = row.optString("action_url", "/notifications");
@@ -401,7 +425,8 @@ public class AlertService extends Service {
                 .setSmallIcon(R.drawable.ic_stat_towems)
                 .setContentTitle(title.length() > 120 ? title.substring(0, 120) : title)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
-                .setNumber(unread)
+                .setNumber(waiting)
+                .setGroup(GROUP_ALERTS)
                 .setAutoCancel(true)
                 .setPriority(urgent ? NotificationCompat.PRIORITY_MAX : NotificationCompat.PRIORITY_HIGH)
                 .setCategory(messageRow
@@ -415,6 +440,31 @@ public class AlertService extends Service {
     /** One id per notification row, stable across polls. */
     private static int alertNotificationId(long id) {
         return (int) (id % 100000) + 10000;
+    }
+
+    /**
+     * A message that arrived after the thread's single bell notice was written.
+     *
+     * The server keeps one notice per conversation, which is right for the bell
+     * and wrong for a phone: the second message in a chat produced no row, so
+     * nothing new reached the watcher and the phone stayed silent. This posts on
+     * that count alone - one banner that the next message replaces, the way a
+     * chat app shows the latest - and still says nothing about the text.
+     */
+    private void showIncomingMessages(int count, int waiting) {
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
+                .setSmallIcon(R.drawable.ic_stat_towems)
+                .setContentTitle(count == 1 ? "New message" : count + " new messages")
+                .setContentText("Open Messages to read it.")
+                .setNumber(waiting)
+                .setGroup(GROUP_ALERTS)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVibrate(VIBRATION)
+                .setContentIntent(openIntent(this, "/messages", 4))
+                .build();
+        notifyIfAllowed(MESSAGES_NOTIFICATION_ID, notification);
     }
 
     /**
@@ -432,6 +482,7 @@ public class AlertService extends Service {
     private void showUnreadSummary(int unread) {
         if (unread <= 0) {
             cancel(SUMMARY_NOTIFICATION_ID);
+            cancel(MESSAGES_NOTIFICATION_ID);
             // Everything is read, so the banners in the shade are stale: drop
             // them too, or a launcher that counts notifications keeps the badge.
             for (Long id : seen) {
@@ -445,6 +496,8 @@ public class AlertService extends Service {
                 .setContentText("Open TOWEMS to read them.")
                 // The number the launcher may draw on the icon.
                 .setNumber(unread)
+                .setGroup(GROUP_ALERTS)
+                .setGroupSummary(true)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
                 .setSilent(true)
