@@ -80,8 +80,12 @@ public final class WatcherStatus {
             // conversation and notice lands on.
             NotificationChannel channel =
                     manager.getNotificationChannel(AlertService.CHANNEL_MESSAGES);
+            // Not just "off": a channel the person (or a battery tool) turned
+            // quiet still draws the banner but never makes a sound, which looks
+            // exactly like a broken watcher from the other side of the phone.
             silenced = channel != null
-                    && channel.getImportance() == NotificationManager.IMPORTANCE_NONE;
+                    && (channel.getImportance() < NotificationManager.IMPORTANCE_DEFAULT
+                            || channel.getSound() == null);
         }
         boolean blocked = !permission || !enabled || silenced;
 
