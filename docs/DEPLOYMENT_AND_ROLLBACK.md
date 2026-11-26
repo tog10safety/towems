@@ -4,10 +4,9 @@
 > (droplet `146.190.94.234`). Sections 1 and 1.1 record the layout that now runs there; the
 > remaining steps are the operating procedure for later releases.
 >
-> **Deployed release: `52e3be2`** (the launcher's unread count as one standing summary
-> notification, 2026-11-26). It and the two commits before it touch only the Android shell, so the
-> droplet runs byte-identical backend and SPA code to `f877915`; the checkout and restart move
-> nothing at runtime. Record later releases in the table in section 1.1.
+> **Deployed release: `d000212`** (pulse reports the unread message count so the phone buzzes for
+> every message, and reading a group chat clears its notice, 2026-11-26). Record later releases in
+> the table in section 1.1.
 
 ---
 
@@ -30,7 +29,7 @@
 | Application directory | `/var/www/towems` — git clone of this repository, checked out at the release SHA, **owned `root:root` (0755)** |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
-| Deployed release | `52e3be2` — the launcher icon's unread count now comes from one standing summary notification (the vendor badge broadcasts are gone), cancelled at zero together with the banners that are already read; Android only, so backend/SPA are unchanged from `f877915` and `dist.prev-796bd7c` remains the rollback build. Record each new release here. |
+| Deployed release | `d000212` — `pulse` reports `unread_messages` (the bell keeps one notice per thread, so a second message in the same chat reached no phone) and reading a group chat clears its notice; the Android watcher alerts on that count and badges it. No SPA change, so `dist.prev-796bd7c` remains the rollback build. Record each new release here. |
 | Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env`, **`WorkingDirectory=/var/www/towems/toms_backend`** |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
 | Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg`; role password copies in `/etc/towems/towems_db_password` (0640 `root:www-data`) and `/etc/towems/postgres_password` (0600 root, operator only) |
