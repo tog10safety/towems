@@ -29,7 +29,7 @@
 | Application directory | `/var/www/towems` — git clone of this repository, checked out at the release SHA, **owned `root:root` (0755)** |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
-| Deployed release | `cdf6ee1` — message footer, rank-ordered rosters, per-group members list (deployed 2026-11-26; `dist.prev-796bd7c` is the retained rollback build). Record each new release here. |
+| Deployed release | `f877915` — pulse reports every unread alert to the phone, device token tracking endpoint, Android watcher status strip (deployed 2026-11-26; backend only, no SPA change, so `dist.prev-796bd7c` remains the rollback build). Record each new release here. |
 | Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env`, **`WorkingDirectory=/var/www/towems/toms_backend`** |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
 | Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg`; role password copies in `/etc/towems/towems_db_password` (0640 `root:www-data`) and `/etc/towems/postgres_password` (0600 root, operator only) |
