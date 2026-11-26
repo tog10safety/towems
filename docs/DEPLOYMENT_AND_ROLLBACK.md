@@ -3,6 +3,10 @@
 > **Production cutover executed on 2026-11-23** against `mrm-system.online`
 > (droplet `146.190.94.234`). Sections 1 and 1.1 record the layout that now runs there; the
 > remaining steps are the operating procedure for later releases.
+>
+> **Deployed release: `6929c7e`** (messaging and group-chat approvals, 2026-11-25). Commits on
+> `main` after that release are documentation only: they are not on the droplet, and deploying
+> them would change nothing at runtime, so no restart is involved.
 
 ---
 
@@ -22,10 +26,11 @@
 | --- | --- |
 | Host | Ubuntu 22.04, `mrm-system.online`, 957 MB RAM |
 | Database | **Self-managed PostgreSQL 14.24 on the same droplet** (not a managed cluster), database `mrm_system`; Django connects as **`towems`** (database/schema/table owner, `CREATEDB` for the restore drill, **not** superuser), Flask still uses `postgres` |
-| Application directory | `/var/www/towems` (git clone of this repository, `main`) |
+| Application directory | `/var/www/towems` — git clone of this repository, checked out at the release SHA, **owned `root:root` (0755)** |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
-| Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env` |
+| Deployed release | `6929c7e` — messaging, group-chat approval workflow, browser push (deployed 2026-11-25). Record each new release here. |
+| Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env`, **`WorkingDirectory=/var/www/towems/toms_backend`** |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
 | Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg`; role password copies in `/etc/towems/towems_db_password` (0640 `root:www-data`) and `/etc/towems/postgres_password` (0600 root, operator only) |
 | Backups | `/var/backups/towems` (0600, `www-data`), passphrase `/etc/towems/backup.passphrase`; timers `towems-backup`, `towems-restore-test`, `towems-backup-health` installed with `/srv/toms` rewritten to `/var/www/towems` and `User=towems` to `www-data` |
@@ -33,6 +38,19 @@
 
 The scheduled jobs run as `www-data`, whose home is `/var/www`; `GNUPGHOME` must therefore be
 set in `backup.env`, and `/etc/towems` must be traversable (`root:www-data 0750`).
+
+**Git runs as root.** The checkout is `root:root` 0755, so every Git command on the droplet runs
+as root — `git -C /var/www/towems …` in a root shell or `sudo git -C /var/www/towems …`.
+`sudo -u www-data git …` fails: the tree is not writable by `www-data`, and Git's safe-directory
+check rejects it. `www-data` only needs read access to the checkout and the venv, plus write
+access to `uploads/`, `signatures/`, `approved_pdfs/` and `static/`. Four paths in the tree are
+untracked runtime data (`approved_pdfs/`, `signatures/`, `static/static/`, `uploads/`), so
+`git status` always lists them; never resolve that with `git clean` or a `--force` checkout.
+
+**Where the service runs.** `towems.service` has `WorkingDirectory=/var/www/towems/toms_backend`
+and starts gunicorn from there, so `manage.py` gets the same directory: either `cd` into it first
+or call it by absolute path (`/var/www/towems/venv/bin/python /var/www/towems/toms_backend/manage.py …`).
+A shell that starts somewhere else (for example `/var/www/towems`) will not find `manage.py`.
 
 ### 1.2 Database roles
 
@@ -425,6 +443,108 @@ re-enrols with their Gmail on next sign-in.
 that have not signed in yet; it does **not** restore old passwords, so anyone who already changed
 theirs keeps the new one. Use it only for a deliberate deferral, not to unblock one person — for
 an individual, reset their password through User Management instead.
+
+### 5.2 Deploying an application release onto the droplet
+
+Every command below runs as root; the application itself still runs as `www-data` under
+`towems.service`.
+
+```bash
+# 1. Back up and restore-test first (section 2) — production is self-managed PostgreSQL
+sudo systemctl start towems-backup.service
+sudo systemctl start towems-restore-test.service
+sudo journalctl -u towems-backup.service -u towems-restore-test.service -n 30 --no-pager
+
+# 2. Check out the release as root (the tree is root-owned — see section 1.1)
+sudo git -C /var/www/towems fetch --all --prune
+sudo git -C /var/www/towems checkout --detach <SHA>
+sudo git -C /var/www/towems rev-parse HEAD     # must print <SHA>
+sudo git -C /var/www/towems status --short      # only the runtime dirs, no modified files
+```
+
+A detached checkout pins production to a reviewed SHA and leaves `main` free to move ahead with
+documentation-only commits. Record the SHA in the table in section 1.1 as part of the release.
+
+```bash
+# 3. Dependencies — only when requirements.txt changed
+/var/www/towems/venv/bin/pip install -r /var/www/towems/toms_backend/requirements.txt
+/var/www/towems/venv/bin/python -c 'import pywebpush'    # messaging push
+
+# 4. Migrate, from the service WorkingDirectory
+cd /var/www/towems/toms_backend
+DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.prod \
+  /var/www/towems/venv/bin/python manage.py migrate --plan
+DATABASE_URL=postgresql://…/mrm_system DJANGO_SETTINGS_MODULE=toms.settings.prod \
+  /var/www/towems/venv/bin/python manage.py migrate
+
+# 5. Run the release's post-migration gate (the 6929c7e block in section 5)
+
+# 6. Restart and confirm the listeners
+sudo systemctl restart towems.service
+systemctl is-active towems.service
+journalctl -u towems.service -n 20 --no-pager
+ss -ltnp | grep 8001       # two gunicorn workers on 127.0.0.1:8001
+```
+
+```bash
+# 7. Upload the SPA — build it on the workstation, there is no Node on the droplet
+rsync -a --delete toms_frontend/dist/ \
+  root@mrm-system.online:/var/www/towems/toms_frontend/dist.new/
+```
+
+Then on the droplet, swap it into place atomically and keep the previous build as the rollback
+copy:
+
+```bash
+mv /var/www/towems/toms_frontend/dist /var/www/towems/toms_frontend/dist.prev-<SHA>
+mv /var/www/towems/toms_frontend/dist.new /var/www/towems/toms_frontend/dist
+```
+
+```bash
+# 8. Smoke — the served bundle, the service worker, and the signed-out API gate
+curl -fsS https://mrm-system.online/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'
+curl -fsSI https://mrm-system.online/sw.js | grep -i content-type   # application/javascript
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://mrm-system.online/api/messaging/conversations/           # 403 while signed out
+```
+
+Rollback for an application release is the previous SHA plus the retained `dist.prev-<SHA>`
+(section 7); the additive migrations do not need undoing.
+
+### 5.3 VAPID keys for closed-tab browser push
+
+Release `6929c7e` added browser push. `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and
+`VAPID_SUBJECT` are read from `/var/www/towems/.env`
+(`VAPID_SUBJECT` defaults to `mailto:no-reply@mrm-system.online`, which is valid here). Without
+the pair the app still delivers in-app messages; only closed-tab notifications stop.
+
+Generate and install the pair once per deployment:
+
+```bash
+# 1. Generate into a root-only file instead of the terminal — the private key is secret
+umask 077 && /var/www/towems/venv/bin/python \
+  /var/www/towems/toms_backend/manage.py vapid_keys > /root/vapid.env
+
+# 2. Append it to the service environment without printing the values
+cat /root/vapid.env >> /var/www/towems/.env
+
+# 3. Confirm names only, and that ownership and mode survived the append
+cut -d= -f1 /var/www/towems/.env | grep '^VAPID_'
+stat -c '%U:%G %a' /var/www/towems/.env      # www-data:www-data 600
+rm -f /root/vapid.env
+
+# 4. Restart so gunicorn picks up the new environment
+sudo systemctl restart towems.service
+```
+
+`VAPID_PRIVATE_KEY` is stored base64-wrapped PEM so it fits on one env line; the public key is
+the base64url point the browser subscribes with. The generated key pair is the only copy — put
+it in the password manager or secret store before deleting the temporary file.
+
+**Never rotate the pair casually.** Every browser subscription is bound to the public key that
+was live when it was created, so a new pair silently stops delivery to every existing device and
+people have to re-enable notifications. Rotate only if the private key leaks, and tell users to
+turn notifications off and on again afterwards.
 
 ## 6. Cutover checklist
 
