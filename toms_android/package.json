@@ -1,0 +1,17 @@
+{
+  "name": "towems-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android shell for TOWEMS: notifications, actions, driver tracking and messages.",
+  "scripts": {
+    "sync": "cap sync android",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.3",
+    "@capacitor/core": "8.6.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.3"
+  }
+}

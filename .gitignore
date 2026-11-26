@@ -64,3 +64,12 @@ Thumbs.db
 Desktop.ini
 .idea/
 .vscode/
+
+# ---------------------------------------------------------------------------
+# Android toolchain and build output (machine-local)
+# ---------------------------------------------------------------------------
+.android-tooling/
+toms_android/android/.gradle/
+toms_android/android/build/
+toms_android/android/app/build/
+toms_android/android/local.properties
