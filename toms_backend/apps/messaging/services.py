@@ -774,6 +774,24 @@ def _notify_mentions(conversation, sender, mentioned) -> None:
     )
 
 
+def _notify_group_members(conversation, sender, mentioned=()) -> None:
+    """Give every member of a group the one-per-thread notice a private chat gets.
+
+    A group has no single recipient, so its messages used to write no notice at
+    all: the text appeared on the Messages page and the phone never heard about
+    it. Each member who can see the thread is told once, exactly as a private
+    chat tells its peer. A mentioned person is left to the mention notice so
+    nobody is told twice, and the body stays a pointer to the inbox.
+    """
+    skip = {getattr(user, "id", user) for user in mentioned}
+    # The roster is the authority on who can see the thread: a unit channel's
+    # people come from the unit (minus the Operations Center's hidden members),
+    # an approved group's from its selected members.
+    for person in conversation_people(conversation, sender):
+        if person.id not in skip:
+            _notify_recipient(conversation, sender, person)
+
+
 def _queue_closed_tab_push(conversation, sender, recipient, message) -> None:
     """Wake the recipient's closed browsers, but not a tab they already have.
 
@@ -867,15 +885,18 @@ def send_message(
     # Sending ends "typing…" immediately, without waiting for the TTL.
     TypingState.objects.filter(user_id=sender.id).delete()
 
-    # A unit channel has no single recipient: the bell would either notify every
-    # member for every message or silently pick one. Its members see the unread
-    # badge instead, like any other thread.
+    # A group has no single recipient, so it is told member by member: the unit
+    # channel and an approved group chat reach a phone the same way a private
+    # chat does. A request routing thread is a workflow, not a chat, and keeps
+    # mentions only.
     recipient = None if conversation.is_group() else peer_of(conversation, sender)
     if recipient is not None:
         _notify_recipient(conversation, sender, recipient)
         _queue_closed_tab_push(conversation, sender, recipient, message)
-    elif mentioned and not conversation.is_group_request():
-        _notify_mentions(conversation, sender, mentioned)
+    elif not conversation.is_group_request():
+        _notify_group_members(conversation, sender, mentioned)
+        if mentioned:
+            _notify_mentions(conversation, sender, mentioned)
 
     log_action(
         actor=sender,

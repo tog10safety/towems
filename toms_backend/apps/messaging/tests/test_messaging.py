@@ -330,32 +330,53 @@ def test_pulse_counts_every_unread_message_not_just_one_per_thread(unit, as_user
     assert second["unread_messages"] == 2
 
 
-def test_reading_a_group_chat_clears_its_bell_notice(unit, as_user):
+def test_a_group_message_notifies_every_member_once(unit, as_user):
+    from apps.messaging import services
+
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    group = services.ensure_unit_group(sender, create=True)
+    sender_client = as_user(sender)
+
+    assert send(sender_client, group.id, "morning all").status_code in (200, 201)
+    notice = Notification.objects.get(recipient=recipient, category="message")
+    assert notice.related_type == "conversation"
+    assert notice.related_id == str(group.id)
+    assert "morning" not in notice.message
+
+    # A second message in the same chat adds no row, but it is still counted.
+    assert send(sender_client, group.id, "second").status_code in (200, 201)
+    assert (
+        Notification.objects.filter(recipient=recipient, category="message").count()
+        == 1
+    )
+    pulse = as_user(recipient).get("/api/notifications/pulse/?since=1").json()
+    assert pulse["unread_messages"] == 2
+
+    # Reading the chat clears the notice, so the phone's count can reach zero.
+    as_user(recipient).post(
+        f"/api/messaging/conversations/{group.id}/read/", {}, format="json"
+    )
+    notice.refresh_from_db()
+    assert notice.is_read is True
+
+
+def test_a_mentioned_member_is_told_once_not_twice(unit, as_user):
     from apps.messaging import services
 
     sender = make_user(unit=unit)
     recipient = make_user(unit=unit)
     group = services.ensure_unit_group(sender, create=True)
 
-    from apps.ops.notifications import notify
-
-    response = send(as_user(sender), group.id, "morning all")
+    response = as_user(sender).post(
+        f"/api/messaging/conversations/{group.id}/messages/",
+        {"body": "ping", "mention_ids": [recipient.id]},
+        format="json",
+    )
     assert response.status_code in (200, 201), response.content
-
-    # A group send does not write a bell notice on its own; this is the notice
-    # shape it writes elsewhere, and reading the thread must clear it.
-    notice = notify(
-        recipient,
-        title="New message from a teammate",
-        message="Open Messages to read it.",
-        category="message",
-        related=("conversation", group.id),
-        actor=sender,
-        priority="normal",
-        action_url=f"/messages?conversation={group.id}",
+    titles = list(
+        Notification.objects.filter(recipient=recipient, category="message")
+        .values_list("title", flat=True)
     )
-    as_user(recipient).post(
-        f"/api/messaging/conversations/{group.id}/read/", {}, format="json"
-    )
-    notice.refresh_from_db()
-    assert notice.is_read is True
+    assert len(titles) == 1
+    assert "mentioned" in titles[0]
