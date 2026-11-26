@@ -4,9 +4,9 @@
 > (droplet `146.190.94.234`). Sections 1 and 1.1 record the layout that now runs there; the
 > remaining steps are the operating procedure for later releases.
 >
-> **Deployed release: `d000212`** (pulse reports the unread message count so the phone buzzes for
-> every message, and reading a group chat clears its notice, 2026-11-26). Record later releases in
-> the table in section 1.1.
+> **Deployed release: `93903bc`** (group chats now write the one-per-thread notice a private chat
+> writes, so a unit or approved group message reaches the phone, 2026-11-26). Record later releases
+> in the table in section 1.1.
 
 ---
 
@@ -29,7 +29,7 @@
 | Application directory | `/var/www/towems` — git clone of this repository, checked out at the release SHA, **owned `root:root` (0755)** |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
-| Deployed release | `d000212` — `pulse` reports `unread_messages` (the bell keeps one notice per thread, so a second message in the same chat reached no phone) and reading a group chat clears its notice; the Android watcher alerts on that count and badges it. No SPA change, so `dist.prev-796bd7c` remains the rollback build. Record each new release here. |
+| Deployed release | `93903bc` — group messages notify every member who can see the thread (unit and approved group chats used to write no notice, so they only ever reached the Messages page); `pulse` reports `unread_messages` and reading a group chat clears its notice. No SPA change, so `dist.prev-796bd7c` remains the rollback build. Record each new release here. |
 | Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env`, **`WorkingDirectory=/var/www/towems/toms_backend`** |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
 | Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg`; role password copies in `/etc/towems/towems_db_password` (0640 `root:www-data`) and `/etc/towems/postgres_password` (0600 root, operator only) |
