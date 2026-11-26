@@ -9393,12 +9393,148 @@ span.flight-fuel-value {
   color: var(--text-muted);
 }
 
+/* Reply, mention and unsend in a thread */
+.bubble.is-unsent {
+  opacity: 0.75;
+}
+
+.bubble-unsent {
+  color: var(--text-muted);
+}
+
+.bubble-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+  font-size: 11px;
+}
+
+.bubble-row.mine .bubble-reply {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.bubble-reply strong {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.bubble-reply span {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.bubble-actions .msg-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 10px;
+}
+
+.mention {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
 .msg-composer {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--border);
+}
+
+.composer-reply {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  font-size: 11px;
+}
+
+.composer-reply > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.composer-reply strong {
+  color: var(--accent);
+}
+
+.composer-reply span {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-mentions {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.mention-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mention-picker {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.mention-picker ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mention-picker .msg-person {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 4px 6px;
 }
 
 .msg-composer textarea {

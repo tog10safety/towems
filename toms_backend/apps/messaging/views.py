@@ -255,19 +255,75 @@ class MessageListCreateView(MessagingBaseView):
                 request.user,
                 serializer.validated_data["body"],
                 request=request,
+                reply_to_id=serializer.validated_data.get("reply_to"),
+                mention_ids=serializer.validated_data.get("mention_ids"),
             )
         except services.MessagingError as exc:
             return Response(
                 {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
             )
-        message = (
-            conversation.messages.select_related("sender", "conversation").get(
-                pk=message.pk
-            )
-        )
+        message = services.messages_query(conversation).get(pk=message.pk)
         return Response(
             serializers.message_payload(message, request.user.id),
             status=status.HTTP_201_CREATED,
+        )
+
+
+class MessageUnsendView(MessagingBaseView):
+    """Withdraw one of the caller's own messages, leaving a trace in the thread."""
+
+    def post(self, request, pk, message_id):
+        conversation = self.conversation(request, pk)
+        message = services.messages_query(conversation).filter(pk=message_id).first()
+        if message is None:
+            raise Http404("Message not found.")
+        try:
+            services.unsend_message(
+                conversation, message, request.user, request=request
+            )
+        except services.MessagingError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        message = services.messages_query(conversation).get(pk=message.pk)
+        return Response(serializers.message_payload(message, request.user.id))
+
+
+class ConversationMembersView(MessagingBaseView):
+    """Read-only roster of an approved group chat for its participants."""
+
+    def get(self, request, pk):
+        conversation = self.conversation(request, pk)
+        if not conversation.is_custom_group():
+            return Response(
+                {"detail": "Members are listed for approved group chats."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        rows = services.conversation_roster(conversation)
+        return Response(
+            {
+                "members": [
+                    serializers.conversation_member_payload(row, request.user.id)
+                    for row in rows
+                ]
+            }
+        )
+
+
+class ConversationPeopleView(MessagingBaseView):
+    """People the caller may name with @ in this thread."""
+
+    def get(self, request, pk):
+        conversation = self.conversation(request, pk)
+        rows = list(services.conversation_people(conversation, request.user)[:200])
+        return Response(
+            {
+                "people": [
+                    serializers.person_payload(row, viewer_id=request.user.id)
+                    for row in rows
+                ],
+                "can_mention": not conversation.is_group_request(),
+            }
         )
 
 

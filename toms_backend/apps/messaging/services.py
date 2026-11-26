@@ -639,6 +639,83 @@ def _display_name(user) -> str:
     )
 
 
+def conversation_people(conversation, viewer):
+    """Who the viewer may name with @ in this thread.
+
+    A private thread offers the peer; the unit channel offers every active
+    member who can still see it (the Operations Center's hidden members are
+    excluded); an approved group offers its selected members. The sender is
+    never offered, because mentioning yourself notifies nobody.
+    """
+    from apps.accounts.models import User
+    from apps.messaging.models import ConversationMember
+
+    if conversation is None:
+        return User.objects.none()
+    if conversation.kind == Conversation.KIND_PRIVATE:
+        peer = peer_of(conversation, viewer)
+        if peer is None:
+            return User.objects.none()
+        return User.objects.filter(pk=peer.pk, is_active=True)
+    if conversation.is_unit_group():
+        hidden = ConversationMember.objects.filter(
+            conversation=conversation, can_view=False
+        ).values_list("user_id", flat=True)
+        return (
+            User.objects.filter(is_active=True, unit_id=conversation.unit_id)
+            .exclude(pk=viewer.id)
+            .exclude(pk__in=hidden)
+            .order_by("last_name", "first_name", "id")
+        )
+    return (
+        User.objects.filter(
+            is_active=True, messaging_memberships__conversation=conversation
+        )
+        .exclude(pk=viewer.id)
+        .order_by("last_name", "first_name", "id")
+        .distinct()
+    )
+
+
+def conversation_roster(conversation):
+    """The active people in a thread, in the order a roster shows them."""
+    from apps.messaging.models import ConversationMember
+
+    if conversation is None:
+        return ConversationMember.objects.none()
+    return (
+        ConversationMember.objects.filter(
+            conversation=conversation, user__is_active=True
+        )
+        .select_related("user")
+        .order_by("user__last_name", "user__first_name", "user__id")
+    )
+
+
+def _notify_mentions(conversation, sender, mentioned) -> None:
+    """Tell each named person once, without repeating what was written."""
+    from apps.ops.notifications import notify_many
+
+    title = f"{_display_name(sender)} mentioned you"
+    if conversation.is_custom_group():
+        subject = conversation.name or "a group chat"
+    else:
+        unit = getattr(conversation, "unit", None)
+        subject = (
+            f"the {unit.acronym or unit.name} unit chat" if unit else "the unit chat"
+        )
+    notify_many(
+        mentioned,
+        title=title,
+        message=f"You were mentioned in {subject}. Open Messages to read it.",
+        level="info",
+        category="message",
+        related=("conversation", conversation.id),
+        actor=sender,
+        action_url=f"/messages?conversation={conversation.id}",
+    )
+
+
 def _queue_closed_tab_push(conversation, sender, recipient, message) -> None:
     """Wake the recipient's closed browsers, but not a tab they already have.
 
@@ -663,8 +740,22 @@ def _queue_closed_tab_push(conversation, sender, recipient, message) -> None:
 
 
 @transaction.atomic
-def send_message(conversation, sender, body, *, request=None):
-    """Store one message and tell the recipient something arrived."""
+def send_message(
+    conversation,
+    sender,
+    body,
+    *,
+    request=None,
+    reply_to_id=None,
+    mention_ids=None,
+):
+    """Store one message and tell the recipient something arrived.
+
+    A reply points at another message in the same thread, and mentions are
+    resolved against the people who can currently see that thread, so neither
+    an id from somewhere else nor a hidden member can be named.
+    """
+    from apps.accounts.models import User
     from apps.core.audit import log_action
 
     text = (body or "").strip()
@@ -675,9 +766,38 @@ def send_message(conversation, sender, body, *, request=None):
             f"A message may be at most {max_message_length()} characters."
         )
 
+    quoted = None
+    if reply_to_id:
+        quoted = Message.objects.filter(
+            pk=reply_to_id, conversation=conversation
+        ).first()
+        if quoted is None:
+            raise MessagingError(
+                "That message is not part of this conversation."
+            )
+        if quoted.unsent_at is not None:
+            raise MessagingError("That message was unsent, so it cannot be quoted.")
+
+    mentioned = []
+    wanted = {int(pk) for pk in (mention_ids or []) if str(pk).isdigit()}
+    if wanted:
+        allowed = set(
+            conversation_people(conversation, sender).values_list("id", flat=True)
+        )
+        if not wanted <= allowed:
+            raise MessagingError(
+                "You can only mention people who can see this conversation."
+            )
+        mentioned = list(User.objects.filter(pk__in=wanted))
+
     message = Message.objects.create(
-        conversation=conversation, sender=sender, body=text
+        conversation=conversation,
+        sender=sender,
+        body=text,
+        reply_to=quoted,
     )
+    if mentioned:
+        message.mentions.set(mentioned)
     conversation.last_message_at = message.created_at
     conversation.save(update_fields=["last_message_at", "updated_at"])
 
@@ -696,6 +816,8 @@ def send_message(conversation, sender, body, *, request=None):
     if recipient is not None:
         _notify_recipient(conversation, sender, recipient)
         _queue_closed_tab_push(conversation, sender, recipient, message)
+    elif mentioned and not conversation.is_group_request():
+        _notify_mentions(conversation, sender, mentioned)
 
     log_action(
         actor=sender,
@@ -705,6 +827,44 @@ def send_message(conversation, sender, body, *, request=None):
         # Metadata only: the audit trail must not become a second copy of the
         # private conversation.
         after={"conversation": conversation.id, "recipient": recipient.id if recipient else None},
+        request=request,
+    )
+    return message
+
+
+@transaction.atomic
+def unsend_message(conversation, message, actor, *, request=None):
+    """Withdraw the sender's own message, leaving the fact that it existed.
+
+    The row stays in the thread as a trace: the text is cleared, the time and
+    person who withdrew it are kept, and the audit trail records the action
+    without ever storing a second copy of what was written.
+    """
+    from apps.core.audit import log_action
+
+    if message.conversation_id != conversation.id:
+        raise MessagingError("That message is not part of this conversation.")
+    if conversation.is_group_request():
+        raise MessagingError(
+            "Decisions in a group chat request cannot be unsent."
+        )
+    if message.sender_id != actor.id:
+        raise MessagingError("Only the sender can unsend this message.")
+    if message.unsent_at is not None:
+        return message
+
+    message.unsent_at = timeutils.now()
+    message.unsent_by = actor
+    message.body = ""
+    message.save(update_fields=["unsent_at", "unsent_by", "body"])
+
+    log_action(
+        actor=actor,
+        action="message_unsent",
+        entity_type="message",
+        entity_id=message.id,
+        before={"conversation": conversation.id},
+        after={"unsent": True},
         request=request,
     )
     return message
@@ -879,9 +1039,17 @@ def conversations_for(user):
 
 
 def messages_query(conversation):
-    return conversation.messages.select_related(
-        "sender", "conversation"
-    ).order_by("id")
+    return (
+        conversation.messages.select_related(
+            "sender",
+            "conversation",
+            "reply_to",
+            "reply_to__sender",
+            "unsent_by",
+        )
+        .prefetch_related("mentions")
+        .order_by("id")
+    )
 
 
 def search_messages(user, term: str, limit: int = 50):
@@ -913,7 +1081,9 @@ def search_messages(user, term: str, limit: int = 50):
         conversation__members__user_id=user.id,
     )
 
-    queryset = Message.objects.filter(scope, body__icontains=term)
+    queryset = Message.objects.filter(
+        scope, body__icontains=term, unsent_at__isnull=True
+    )
     if not is_unit_group_admin(user, getattr(user, "unit_id", None)):
         # A restricted member must not find the channel through search either.
         hidden = ConversationMember.objects.filter(

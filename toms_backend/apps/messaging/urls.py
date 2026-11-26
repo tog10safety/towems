@@ -15,6 +15,21 @@ urlpatterns = [
         name="messaging-messages",
     ),
     path(
+        "messaging/conversations/<int:pk>/messages/<int:message_id>/unsend/",
+        views.MessageUnsendView.as_view(),
+        name="messaging-message-unsend",
+    ),
+    path(
+        "messaging/conversations/<int:pk>/members/",
+        views.ConversationMembersView.as_view(),
+        name="messaging-conversation-members",
+    ),
+    path(
+        "messaging/conversations/<int:pk>/people/",
+        views.ConversationPeopleView.as_view(),
+        name="messaging-conversation-people",
+    ),
+    path(
         "messaging/conversations/<int:pk>/read/",
         views.ConversationReadView.as_view(),
         name="messaging-read",

@@ -53,8 +53,52 @@ function receiptLabel(message) {
   return "sent";
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/*
+ * Highlight the people the sender named. The server stores who was mentioned,
+ * so a rename follows the person instead of the text that was typed.
+ */
+function renderMentions(text, mentions) {
+  const names = (mentions || [])
+    .map((row) => row.full_name)
+    .filter(Boolean)
+    .sort((first, second) => second.length - first.length);
+  if (!names.length) return text;
+  const pattern = new RegExp(`(@(?:${names.map(escapeRegExp).join("|")}))`, "g");
+  return text.split(pattern).map((part, index) =>
+    names.some((name) => part === `@${name}`) ? (
+      <mark key={index} className="mention">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
 function notificationsSupported() {
   return typeof window !== "undefined" && "Notification" in window;
+}
+
+/** Ask for notification permission on both promise-based and older browsers. */
+function requestNotificationPermission() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      const result = Notification.requestPermission(done);
+      if (result && typeof result.then === "function") result.then(done);
+    } catch {
+      done("denied");
+    }
+  });
 }
 
 export default function MessagesPage() {
@@ -86,6 +130,13 @@ export default function MessagesPage() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [requestSaving, setRequestSaving] = useState(false);
+  // Reply, mentions and unsend apply to one message at a time in the thread.
+  const [replyTo, setReplyTo] = useState(null);
+  const [mentions, setMentions] = useState([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionTerm, setMentionTerm] = useState("");
+  const [mentionPeople, setMentionPeople] = useState([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
 
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [peopleTerm, setPeopleTerm] = useState("");
@@ -106,6 +157,8 @@ export default function MessagesPage() {
   const [permission, setPermission] = useState(
     notificationsSupported() ? Notification.permission : "unsupported"
   );
+  // Feedback for the Enable notifications button, shown beside the thread.
+  const [notificationNotice, setNotificationNotice] = useState("");
 
   const bodyRef = useRef(null);
   const seenIds = useRef(new Set());
@@ -279,6 +332,27 @@ export default function MessagesPage() {
     return () => clearTimeout(timer);
   }, [peopleOpen, peopleTerm]);
 
+  // --- mention picker ------------------------------------------------------
+  useEffect(() => {
+    if (!mentionOpen || !activeId) return undefined;
+    let cancelled = false;
+    setMentionLoading(true);
+    api
+      .get(`/messaging/conversations/${activeId}/people/`)
+      .then((data) => {
+        if (!cancelled) setMentionPeople(data.people || []);
+      })
+      .catch((err) => {
+        if (!cancelled) setThreadError(err.message || "Unable to load people.");
+      })
+      .finally(() => {
+        if (!cancelled) setMentionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mentionOpen, activeId]);
+
   // --- actions -------------------------------------------------------------
   function openConversation(id, term = "") {
     setActiveId(id);
@@ -287,6 +361,9 @@ export default function MessagesPage() {
     setMembersOpen(false);
     setMemberNotice("");
     setMessages([]);
+    setReplyTo(null);
+    setMentions([]);
+    setMentionOpen(false);
     // Drop the previous conversation's card too: until this one loads, a stale
     // private thread must not stand in for a routing thread opened by id.
     setThread(null);
@@ -303,6 +380,11 @@ export default function MessagesPage() {
   function closeThread() {
     setActiveId(null);
     setThread(null);
+    setReplyTo(null);
+    setMentions([]);
+    setMentionOpen(false);
+    setMembersOpen(false);
+    setMemberNotice("");
     const url = new URL(window.location.href);
     url.searchParams.delete("conversation");
     window.history.replaceState({}, "", url);
@@ -329,14 +411,20 @@ export default function MessagesPage() {
     if (!body || !activeId || sending) return;
     setSending(true);
     try {
+      const payload = { body };
+      if (replyTo) payload.reply_to = replyTo.id;
+      if (mentions.length) payload.mention_ids = mentions.map((row) => row.id);
       const message = await api.post(
         `/messaging/conversations/${activeId}/messages/`,
-        { body }
+        payload
       );
       setMessages((current) => [...current, message]);
       seenIds.current.add(message.id);
       lastTypingSent.current = 0;
       setDraft("");
+      setReplyTo(null);
+      setMentions([]);
+      setMentionOpen(false);
       autoScroll.current = true;
       requestAnimationFrame(() => {
         const element = bodyRef.current;
@@ -387,7 +475,24 @@ export default function MessagesPage() {
   }
 
   function handleDraft(event) {
+    const previous = draft;
     const value = event.target.value;
+    const caret = event.target.selectionStart ?? value.length;
+    // Only a freshly typed "@" opens the picker. Continuing a sentence after a
+    // mention that is already in the box must not reopen it, even though that
+    // mention's name still sits behind the caret.
+    const typedAt =
+      value.length === previous.length + 1 &&
+      value[caret - 1] === "@" &&
+      (caret === 1 || /[\s(]/.test(value[caret - 2]));
+    if (!mentionOpen && typedAt && activeConversation?.kind !== "private" && canPost) {
+      setMentionTerm("");
+      setMentionOpen(true);
+    } else if (mentionOpen) {
+      const trailing = value.slice(0, caret).match(/@([^@\n]{0,30})$/);
+      if (trailing) setMentionTerm(trailing[1]);
+      else setMentionOpen(false);
+    }
     setDraft(value);
     if (!activeId || !value.trim() || activeConversation?.kind !== "private") return;
     const now = Date.now();
@@ -402,6 +507,52 @@ export default function MessagesPage() {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       handleSend(event);
+    }
+  }
+
+  function startReply(message) {
+    setReplyTo(message);
+    const box = document.querySelector(".msg-composer textarea");
+    if (box) box.focus();
+  }
+
+  function chooseMention(person) {
+    setMentions((current) =>
+      current.some((row) => row.id === person.id) ? current : [...current, person]
+    );
+    setDraft((current) => {
+      if (/@([^@\n]{0,30})$/.test(current)) {
+        return current.replace(/@([^@\n]{0,30})$/, `@${person.full_name} `);
+      }
+      const spacer = current && !current.endsWith(" ") ? " " : "";
+      return `${current}${spacer}@${person.full_name} `;
+    });
+    setMentionOpen(false);
+    setMentionTerm("");
+  }
+
+  function removeMention(id) {
+    setMentions((current) => current.filter((row) => row.id !== id));
+  }
+
+  async function unsendMessage(message) {
+    if (!activeId || !message.can_unsend) return;
+    const confirmed = window.confirm(
+      "Unsend this message? Everyone will see that it was unsent."
+    );
+    if (!confirmed) return;
+    try {
+      const updated = await api.post(
+        `/messaging/conversations/${activeId}/messages/${message.id}/unsend/`,
+        {}
+      );
+      setMessages((current) =>
+        current.map((row) => (row.id === updated.id ? updated : row))
+      );
+      if (replyTo?.id === updated.id) setReplyTo(null);
+      loadConversations({ silent: true });
+    } catch (err) {
+      setThreadError(err.message || "That message could not be unsent.");
     }
   }
 
@@ -425,14 +576,25 @@ export default function MessagesPage() {
   }
 
   async function openMembers() {
+    if (!activeId) return;
     setMembersOpen(true);
     setMemberNotice("");
     setMembersLoading(true);
     try {
-      const data = await api.get("/messaging/unit-group/members/");
+      // The unit channel is administered through its own roster endpoint; an
+      // approved group only needs the read-only list of its participants.
+      const path = isCustomGroup
+        ? `/messaging/conversations/${activeId}/members/`
+        : "/messaging/unit-group/members/";
+      const data = await api.get(path);
       setMembers(data.members || []);
     } catch (err) {
-      setMemberNotice(err.message || "Unable to load the unit roster.");
+      setMemberNotice(
+        err.message ||
+          (isCustomGroup
+            ? "Unable to load the group members."
+            : "Unable to load the unit roster.")
+      );
     } finally {
       setMembersLoading(false);
     }
@@ -461,10 +623,26 @@ export default function MessagesPage() {
   }
 
   async function enableNotifications() {
-    if (!notificationsSupported()) return;
-    const result = await Notification.requestPermission();
+    setNotificationNotice("");
+    if (!notificationsSupported()) {
+      setNotificationNotice("This browser does not support notifications.");
+      return;
+    }
+    const result = await requestNotificationPermission();
     setPermission(result);
-    if (result !== "granted") return;
+    if (result === "denied") {
+      // The browser remembers an earlier block and will not prompt again, so
+      // the button used to look dead. Say what to change instead.
+      setNotificationNotice(
+        "Notifications are blocked for this site. Allow them in your browser's site settings, then try again."
+      );
+      return;
+    }
+    if (result !== "granted") {
+      setNotificationNotice("Notification permission was not granted.");
+      return;
+    }
+    setNotificationNotice("Notifications are on for this browser.");
     // The same permission also lets the service worker alert a closed tab; a
     // server without VAPID keys still keeps the in-app/while-open behaviour.
     let outcome = { ok: false, reason: "server" };
@@ -473,9 +651,11 @@ export default function MessagesPage() {
     } catch {
       // A browser without a usable push service still keeps the while-open path.
     }
-    if (!outcome.ok && outcome.reason === "disabled") {
-      setNotice(
-        "Alerts are enabled while TOWEMS is open. Closed-tab push is not configured on this server."
+    if (!outcome.ok) {
+      setNotificationNotice(
+        outcome.reason === "disabled"
+          ? "Alerts are enabled while TOWEMS is open. Closed-tab push is not configured on this server."
+          : "Alerts are enabled while TOWEMS is open. Closed-tab push could not be set up on this browser."
       );
     }
   }
@@ -784,6 +964,11 @@ export default function MessagesPage() {
                   )}
                 </span>
               </div>
+              {isCustomGroup && (
+                <Button variant="ghost" size="sm" onClick={openMembers}>
+                  Members
+                </Button>
+              )}
               {isUnitGroup && (thread?.is_admin || activeConversation?.is_admin) && (
                 <Button variant="ghost" size="sm" onClick={openMembers}>
                   Members
@@ -796,14 +981,25 @@ export default function MessagesPage() {
               )}
             </header>
 
-            {membersOpen && isUnitGroup && (
-              <div className="group-members" role="dialog" aria-label="Unit chat members">
+            {notificationNotice && (
+              <p className="messaging-note" role="status">
+                {notificationNotice}
+              </p>
+            )}
+
+            {membersOpen && (isUnitGroup || isCustomGroup) && (
+              <div
+                className="group-members"
+                role="dialog"
+                aria-label={isUnitGroup ? "Unit chat members" : "Group chat members"}
+              >
                 <header className="group-members-head">
                   <div>
-                    <strong>Unit chat members</strong>
+                    <strong>{isUnitGroup ? "Unit chat members" : "Group chat members"}</strong>
                     <p className="hint">
-                      The Operations Center controls who can see and post in this unit
-                      channel. Administrators and the Operations Center always keep access.
+                      {isUnitGroup
+                        ? "The Operations Center controls who can see and post in this unit channel. Administrators and the Operations Center always keep access."
+                        : "The personnel selected for this group and the approvers who admitted them can see it."}
                     </p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => setMembersOpen(false)}>
@@ -816,7 +1012,7 @@ export default function MessagesPage() {
                   </p>
                 )}
                 {membersLoading ? (
-                  <Loading label="Loading unit roster…" />
+                  <Loading label={isUnitGroup ? "Loading unit roster…" : "Loading members…"} />
                 ) : members.length ? (
                   <ul className="group-member-list">
                     {members.map((member) => (
@@ -829,33 +1025,43 @@ export default function MessagesPage() {
                             {member.is_self ? " · You" : ""}
                           </span>
                         </span>
-                        <label className="check-row">
-                          <input
-                            type="checkbox"
-                            checked={member.can_view}
-                            disabled={member.is_admin || memberSavingId === member.id}
-                            onChange={(event) =>
-                              updateMember(member, "can_view", event.target.checked)
-                            }
-                          />
-                          View
-                        </label>
-                        <label className="check-row">
-                          <input
-                            type="checkbox"
-                            checked={member.can_post}
-                            disabled={member.is_admin || memberSavingId === member.id}
-                            onChange={(event) =>
-                              updateMember(member, "can_post", event.target.checked)
-                            }
-                          />
-                          Post
-                        </label>
+                        {isUnitGroup && (
+                          <>
+                            <label className="check-row">
+                              <input
+                                type="checkbox"
+                                checked={member.can_view}
+                                disabled={member.is_admin || memberSavingId === member.id}
+                                onChange={(event) =>
+                                  updateMember(member, "can_view", event.target.checked)
+                                }
+                              />
+                              View
+                            </label>
+                            <label className="check-row">
+                              <input
+                                type="checkbox"
+                                checked={member.can_post}
+                                disabled={member.is_admin || memberSavingId === member.id}
+                                onChange={(event) =>
+                                  updateMember(member, "can_post", event.target.checked)
+                                }
+                              />
+                              Post
+                            </label>
+                          </>
+                        )}
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <EmptyState message="No active members in this unit." />
+                  <EmptyState
+                    message={
+                      isUnitGroup
+                        ? "No active members in this unit."
+                        : "No active members in this group."
+                    }
+                  />
                 )}
               </div>
             )}
@@ -904,19 +1110,71 @@ export default function MessagesPage() {
                             {initials(message.sender)}
                           </span>
                         )}
-                        <div className="bubble">
+                        <div className={`bubble ${message.is_unsent ? "is-unsent" : ""}`}>
                           {isGroup && !message.is_mine && (
                             <span className="bubble-sender">
                               {message.sender.full_name}
                             </span>
                           )}
-                          <p>{message.body}</p>
+                          {message.reply_to && (
+                            <div className="bubble-reply">
+                              <strong>
+                                {message.reply_to.sender?.full_name || "Unknown sender"}
+                              </strong>
+                              <span>
+                                {message.reply_to.is_unsent
+                                  ? "Message unsent"
+                                  : message.reply_to.body}
+                              </span>
+                            </div>
+                          )}
+                          {message.is_unsent ? (
+                            <p className="bubble-unsent">
+                              <em>Message unsent</em>
+                            </p>
+                          ) : (
+                            <p>{renderMentions(message.body, message.mentions)}</p>
+                          )}
                           <span className="bubble-meta">
-                            {formatTime(message.created_at)}
-                            {message.is_mine && message.status
-                              ? ` · ${receiptLabel(message)}`
-                              : ""}
+                            {message.is_unsent
+                              ? `${
+                                  message.is_mine
+                                    ? "You unsent this"
+                                    : `${
+                                        message.unsent_by?.full_name ||
+                                        message.sender.full_name
+                                      } unsent this`
+                                } · ${formatTime(
+                                  message.unsent_at || message.created_at
+                                )}`
+                              : `${formatTime(message.created_at)}${
+                                  message.is_mine && message.status
+                                    ? ` · ${receiptLabel(message)}`
+                                    : ""
+                                }`}
                           </span>
+                          {!message.is_unsent && (canPost || message.can_unsend) && (
+                            <div className="bubble-actions">
+                              {canPost && (
+                                <button
+                                  type="button"
+                                  className="msg-link"
+                                  onClick={() => startReply(message)}
+                                >
+                                  Reply
+                                </button>
+                              )}
+                              {message.can_unsend && (
+                                <button
+                                  type="button"
+                                  className="msg-link"
+                                  onClick={() => unsendMessage(message)}
+                                >
+                                  Unsend
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -988,6 +1246,80 @@ export default function MessagesPage() {
                   </p>
                 )}
                 <form className="msg-composer" onSubmit={handleSend}>
+                  {replyTo && (
+                    <div className="composer-reply">
+                      <div>
+                        <strong>Replying to {replyTo.sender.full_name}</strong>
+                        <span>{replyTo.body.slice(0, 120)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="msg-link"
+                        onClick={() => setReplyTo(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                  {mentions.length > 0 && (
+                    <div className="composer-mentions">
+                      <span>Mentioning:</span>
+                      {mentions.map((person) => (
+                        <button
+                          key={person.id}
+                          type="button"
+                          className="mention-chip"
+                          onClick={() => removeMention(person.id)}
+                          title="Remove this mention"
+                        >
+                          @{person.full_name} ×
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {mentionOpen && (
+                    <div className="mention-picker" role="dialog" aria-label="Mention someone">
+                      <Input
+                        value={mentionTerm}
+                        onChange={(event) => setMentionTerm(event.target.value)}
+                        placeholder="Search people to mention…"
+                        aria-label="Search people to mention"
+                      />
+                      {mentionLoading ? (
+                        <p className="hint">Loading…</p>
+                      ) : (
+                        <ul>
+                          {mentionPeople
+                            .filter((person) => {
+                              const term = mentionTerm.trim().toLowerCase();
+                              if (!term) return true;
+                              return [person.full_name, person.serial_number]
+                                .filter(Boolean)
+                                .some((value) => value.toLowerCase().includes(term));
+                            })
+                            .slice(0, 8)
+                            .map((person) => (
+                              <li key={person.id}>
+                                <button
+                                  type="button"
+                                  className="msg-person"
+                                  onClick={() => chooseMention(person)}
+                                >
+                                  @{person.full_name}
+                                </button>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                      <button
+                        type="button"
+                        className="msg-link"
+                        onClick={() => setMentionOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  )}
                   <textarea
                     className="input"
                     value={draft}
@@ -1005,6 +1337,21 @@ export default function MessagesPage() {
                     }
                     aria-label="Message"
                   />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!canPost || activeConversation?.kind === "private"}
+                    onClick={() => {
+                      if (activeConversation?.kind === "private") return;
+                      setMentionTerm("");
+                      setMentionOpen((open) => !open);
+                    }}
+                    aria-label="Mention someone"
+                    title="Mention someone"
+                  >
+                    @
+                  </Button>
                   <Button type="submit" disabled={!canPost || !draft.trim() || sending}>
                     Send
                   </Button>

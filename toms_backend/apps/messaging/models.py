@@ -214,11 +214,39 @@ class Message(models.Model):
         related_name="messaging_messages_sent",
     )
     body = models.TextField()
+    #: The message this one answers, if any. Deleting the target never deletes
+    #: the answer; the quoted card simply disappears.
+    reply_to = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="replies",
+    )
+    #: People the sender named with @. Stored as rows so a rename follows the
+    #: person and a mention can notify them without parsing the text back.
+    mentions = models.ManyToManyField(
+        "accounts.User",
+        blank=True,
+        related_name="messaging_mentions",
+    )
     created_at = models.DateTimeField(default=timeutils.now)
     #: Set when the recipient's client fetched it.
     delivered_at = models.DateTimeField(null=True, blank=True)
     #: Set when the recipient opened the thread past it.
     read_at = models.DateTimeField(null=True, blank=True)
+    #: An unsent message keeps its row and its place in the thread so readers
+    #: see that something was withdrawn; the text itself is cleared.
+    unsent_at = models.DateTimeField(null=True, blank=True)
+    unsent_by = models.ForeignKey(
+        "accounts.User",
+        db_column="unsent_by_id",
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        related_name="+",
+    )
 
     class Meta:
         db_table = "messaging_message"
@@ -227,6 +255,10 @@ class Message(models.Model):
             models.Index(fields=["conversation", "id"], name="msg_conv_id_idx"),
             models.Index(fields=["sender", "created_at"], name="msg_sender_created_idx"),
         ]
+
+    @property
+    def is_unsent(self) -> bool:
+        return self.unsent_at is not None
 
     def status_for(self, viewer_id) -> str | None:
         """A sender sees sent/delivered/read; a recipient sees nothing."""

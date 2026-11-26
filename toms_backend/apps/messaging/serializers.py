@@ -27,6 +27,21 @@ class SendMessageSerializer(serializers.Serializer):
         trim_whitespace=True,
         max_length=services.max_message_length(),
     )
+    #: The message being answered, in this same thread.
+    reply_to = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    #: People named with @; the server checks they can see the thread.
+    mention_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+    )
+
+    def validate_mention_ids(self, value):
+        if len(set(value)) != len(value):
+            raise serializers.ValidationError("Mention each person once.")
+        if len(value) > 50:
+            raise serializers.ValidationError("Mention at most 50 people at once.")
+        return value
 
 
 class TypingSerializer(serializers.Serializer):
@@ -135,6 +150,21 @@ def _name(user) -> str:
     )
 
 
+def conversation_member_payload(membership, viewer_id) -> dict:
+    """One person on a group's roster. Approved groups keep this read-only."""
+    user = membership.user
+    return {
+        "id": user.id,
+        "full_name": _name(user),
+        "rank": user.rank or "",
+        "serial_number": user.serial_number,
+        "can_view": membership.can_view,
+        "can_post": membership.can_post,
+        "is_admin": False,
+        "is_self": user.id == viewer_id,
+    }
+
+
 def person_payload(user, *, viewer_id=None) -> dict:
     """A directory card: enough to pick the right person, nothing more."""
     return {
@@ -151,14 +181,53 @@ def person_payload(user, *, viewer_id=None) -> dict:
     }
 
 
+def _reply_card(message: Message) -> dict | None:
+    """What the thread shows above a reply: who said it, and just enough text."""
+    target = message.reply_to
+    if target is None:
+        return None
+    unsent = target.unsent_at is not None
+    sender = getattr(target, "sender", None)
+    return {
+        "id": target.id,
+        "is_unsent": unsent,
+        "body": "" if unsent else target.body.strip()[:140],
+        "sender": (
+            {"id": sender.id, "full_name": _name(sender)} if sender is not None else None
+        ),
+    }
+
+
 def message_payload(message: Message, viewer_id) -> dict:
+    conversation = getattr(message, "conversation", None)
     is_group = bool(
-        getattr(getattr(message, "conversation", None), "is_group", lambda: False)()
+        getattr(conversation, "is_group", lambda: False)()
     )
+    is_request = bool(
+        getattr(conversation, "is_group_request", lambda: False)()
+    )
+    is_unsent = message.unsent_at is not None
+    unsent_by = getattr(message, "unsent_by", None)
     return {
         "id": message.id,
         "conversation_id": message.conversation_id,
-        "body": message.body,
+        # An unsent message keeps its row but not its text.
+        "body": "" if is_unsent else message.body,
+        "is_unsent": is_unsent,
+        "unsent_at": _iso(message.unsent_at),
+        "unsent_by": (
+            {"id": message.unsent_by_id, "full_name": _name(unsent_by)}
+            if unsent_by is not None
+            else None
+        ),
+        "can_unsend": (
+            message.sender_id == viewer_id and not is_unsent and not is_request
+        ),
+        "reply_to": _reply_card(message) if message.reply_to_id else None,
+        "mentions": [
+            {"id": person.id, "full_name": _name(person)}
+            for person in message.mentions.all()
+        ],
         "created_at": _iso(message.created_at),
         "is_mine": message.sender_id == viewer_id,
         "sender": {
@@ -184,7 +253,11 @@ def _last_message(conversation, viewer_id):
         body = (conversation.preview_body or "").strip()
         return {
             "id": conversation.preview_id,
-            "body": body[:140] + ("…" if len(body) > 140 else ""),
+            "body": (
+                body[:140] + ("…" if len(body) > 140 else "")
+                if body
+                else "Message unsent"
+            ),
             "created_at": _iso(conversation.preview_at),
             "is_mine": conversation.preview_sender_id == viewer_id,
         }
@@ -194,7 +267,11 @@ def _last_message(conversation, viewer_id):
     body = message.body.strip()
     return {
         "id": message.id,
-        "body": body[:140] + ("…" if len(body) > 140 else ""),
+        "body": (
+            body[:140] + ("…" if len(body) > 140 else "")
+            if body
+            else "Message unsent"
+        ),
         "created_at": _iso(message.created_at),
         "is_mine": message.sender_id == viewer_id,
     }
