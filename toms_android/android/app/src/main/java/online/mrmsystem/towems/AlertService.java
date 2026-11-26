@@ -17,6 +17,7 @@ import android.util.Log;
 import android.webkit.CookieManager;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -254,7 +255,14 @@ public class AlertService extends Service {
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setContentIntent(openIntent(this, "/notifications", 0))
                 .build();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            // Android 15 gives a data-sync service six hours in a day and then
+            // ends it - the watcher went quiet mid-day and only came back when
+            // the app was opened. A messaging service carries no such limit and
+            // says what this actually is: watching for messages.
+            startForeground(SERVICE_NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(SERVICE_NOTIFICATION_ID, notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
@@ -262,9 +270,44 @@ public class AlertService extends Service {
         }
     }
 
+    /**
+     * The system ended the foreground service (a data-sync time limit on an
+     * Android release that has one). Stopping cleanly avoids the ANR that
+     * follows ignoring it; the watcher returns on the next launch.
+     */
+    @Override
+    public void onTimeout(int startId, int foregroundServiceType) {
+        Log.w(TAG, "the system ended the watcher (type " + foregroundServiceType + ")");
+        stopSelf();
+    }
+
+    /**
+     * Swiping the app out of recents is not a sign-out: the watcher goes back up, so
+     * a message still arrives with no TOWEMS window anywhere.
+     */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        try {
+            ContextCompat.startForegroundService(
+                    getApplicationContext(), new Intent(this, AlertService.class));
+        } catch (RuntimeException refused) {
+            Log.i(TAG, "restart after swipe refused: "
+                    + refused.getClass().getSimpleName());
+        }
+        super.onTaskRemoved(rootIntent);
+    }
+
     /** One round trip to the server. Returns how long to wait before the next. */
     private long pollOnce() {
-        String cookie = CookieManager.getInstance().getCookie(BASE_URL);
+        // A service restarted on its own has no WebView yet, and asking the cookie
+        // store then throws; the stored token is enough to keep polling, so that
+        // must not be the thing that silences a phone in the background.
+        String cookie = null;
+        try {
+            cookie = CookieManager.getInstance().getCookie(BASE_URL);
+        } catch (RuntimeException noWebView) {
+            Log.i(TAG, "no cookie store yet: " + noWebView.getClass().getSimpleName());
+        }
         String session = cookieValue(cookie, SESSION_COOKIE);
         String token = prefs.getString(TOKEN_KEY, null);
 
@@ -499,8 +542,9 @@ public class AlertService extends Service {
                 .setGroup(GROUP_ALERTS)
                 .setGroupSummary(true)
                 .setAutoCancel(true)
+                // Heard once when it appears, quiet on the twenty-second refresh:
+                // a count is worth a sound when it is new, not every time it is read.
                 .setOnlyAlertOnce(true)
-                .setSilent(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .setContentIntent(openIntent(this, "/notifications", 3))

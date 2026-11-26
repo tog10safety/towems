@@ -24,11 +24,15 @@
 
         </activity>
 
-        <!-- Alerts while the app is closed: polls the same pulse the in-app bell uses. -->
+        <!-- Alerts while the app is closed: polls the same pulse the in-app bell
+             uses. Android 15 caps a dataSync service at six hours a day and then
+             stops it, which is why alerts only appeared when the app was opened
+             again; the messaging type has no such limit, and dataSync stays for
+             the releases before Android 14. -->
         <service
             android:name=".AlertService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|remoteMessaging" />
 
         <!-- The driver's position, recorded natively so a locked screen does not
              stop it. Started only while a run is open. -->
@@ -63,6 +67,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- The watcher receives messages, so on Android 14+ it runs as a messaging
+         service: Android 15 stops a data-sync service after six hours a day. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- The driver page records the vehicle's position only while a run is open. -->
