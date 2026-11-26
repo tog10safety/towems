@@ -93,6 +93,7 @@ public class AlertService extends Service {
     private static final int MESSAGES_NOTIFICATION_ID = 1002;
     private static final int INBOX_NOTIFICATION_ID = 1001;
     private static final int TEST_NOTIFICATION_ID = 1003;
+    private static final int SUMMARY_NOTIFICATION_ID = 1004;
 
     /** MainActivity keeps this true while a TOWEMS screen is visible. */
     public static volatile boolean appVisible = false;
@@ -213,8 +214,8 @@ public class AlertService extends Service {
         alerts.setDescription("Abort orders, emergencies, movement tasks and approvals.");
         alerts.enableVibration(true);
         alerts.setVibrationPattern(VIBRATION);
-        // The launcher needs the channel's permission before it may badge the
-        // icon at all; the number itself comes from Badges and the notification.
+        // A channel that allows badges is half of what a launcher needs; the
+        // other half is Notification.number on each alert (see showAlert).
         alerts.setShowBadge(true);
         manager.createNotificationChannel(alerts);
 
@@ -275,7 +276,6 @@ public class AlertService extends Service {
             }
         }
         if (token == null) {
-            Badges.set(this, 0);
             recordFailure(0, null);
             return SIGNED_OUT_MS;
         }
@@ -287,7 +287,6 @@ public class AlertService extends Service {
             forgetToken();
             token = session == null ? null : mint(cookie, session);
             if (token == null) {
-                Badges.set(this, 0);
                 recordFailure(0, null);
                 return SIGNED_OUT_MS;
             }
@@ -314,7 +313,7 @@ public class AlertService extends Service {
         int unread = pulse.has("unread")
                 ? pulse.optInt("unread", 0)
                 : (urgent == null ? 0 : urgent.length());
-        Badges.set(this, unread);
+        showUnreadSummary(unread);
         if (!firstRun && !appVisible && urgent != null) {
             for (int index = 0; index < urgent.length(); index += 1) {
                 JSONObject row = urgent.optJSONObject(index);
@@ -357,9 +356,7 @@ public class AlertService extends Service {
             return;
         }
         int unread = summary.optInt("unread_total", 0);
-        // The pulse cannot provide a count on this server version, so the
-        // message total is the only number the icon can carry.
-        Badges.set(this, unread);
+        showUnreadSummary(unread);
         int previous = prefs.getInt("unread_total", -1);
         prefs.edit().putInt("unread_total", unread).apply();
         if (unread <= 0) {
@@ -411,8 +408,51 @@ public class AlertService extends Service {
                         ? NotificationCompat.CATEGORY_MESSAGE
                         : urgent ? NotificationCompat.CATEGORY_ALARM : NotificationCompat.CATEGORY_EVENT)
                 .setVibrate(VIBRATION)
-                .setContentIntent(openIntent(this, path, (int) (row.optLong("id", 0) % 100000) + 10000));
-        notifyIfAllowed((int) (row.optLong("id", 0) % 100000) + 10000, builder.build());
+                .setContentIntent(openIntent(this, path, alertNotificationId(row.optLong("id", 0))));
+        notifyIfAllowed(alertNotificationId(row.optLong("id", 0)), builder.build());
+    }
+
+    /** One id per notification row, stable across polls. */
+    private static int alertNotificationId(long id) {
+        return (int) (id % 100000) + 10000;
+    }
+
+    /**
+     * The number on the launcher icon, as one standing notification.
+     *
+     * A launcher draws the badge from what is in the shade, so per-row banners
+     * alone kept the icon lit after everything had been read in the app: the
+     * banners stayed until they were dismissed by hand. This line carries the
+     * account's real unread count instead, and is rewritten on every poll - a
+     * no-op update while the count is steady, silence and no vibration because
+     * the count is not itself news - and removed at zero, along with the banners
+     * that are already read. Reading in the app therefore clears the icon on the
+     * next poll rather than whenever the phone is tidied up.
+     */
+    private void showUnreadSummary(int unread) {
+        if (unread <= 0) {
+            cancel(SUMMARY_NOTIFICATION_ID);
+            // Everything is read, so the banners in the shade are stale: drop
+            // them too, or a launcher that counts notifications keeps the badge.
+            for (Long id : seen) {
+                cancel(alertNotificationId(id));
+            }
+            return;
+        }
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_towems)
+                .setContentTitle(unread == 1 ? "1 unread item" : unread + " unread items")
+                .setContentText("Open TOWEMS to read them.")
+                // The number the launcher may draw on the icon.
+                .setNumber(unread)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setContentIntent(openIntent(this, "/notifications", 3))
+                .build();
+        notifyIfAllowed(SUMMARY_NOTIFICATION_ID, notification);
     }
 
     private void showPendingActions(int pending) {
