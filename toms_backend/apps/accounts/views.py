@@ -497,8 +497,9 @@ class DeviceTokenView(APIView):
 
     Reached only with the live WebView session, which has already passed the
     password, the authenticator and the first-sign-in gates. The token it
-    returns cannot be used to mint another one, cannot write, and dies when
-    that session ends - so the web login itself is never extended.
+    returns cannot be used to mint another one, cannot write beyond its own
+    driver's GPS breadcrumbs, and dies when that session ends - so the web login
+    itself is never extended.
     """
 
     permission_classes = [IsAuthenticated]
@@ -529,6 +530,81 @@ class DeviceTokenView(APIView):
         return Response(
             {"token": raw, "expires_at": row.expires_at, "label": row.label},
             status=status.HTTP_201_CREATED,
+        )
+
+
+class DeviceTrackingView(APIView):
+    """The driver's own breadcrumb feed, reachable without a browser session.
+
+    The tracker used to report only from the page, so locking the screen stopped
+    it. The phone's foreground location service asks this endpoint which run it
+    should be recording, then posts fixes to it while that run is open.
+
+    ``GET`` answers only about runs this account drives, and the ``POST`` path
+    goes through the same ``tracking.can_ping`` gate the web page does, so the
+    narrow token can move a vehicle only when the account is its assigned
+    driver and the run is still open.
+    """
+
+    authentication_classes = device_tokens.ALERT_AUTHENTICATION
+    permission_classes = [IsAuthenticated, device_tokens.DeviceTokenTracking]
+
+    def get(self, request):
+        from apps.ops.models import VehicleRun
+
+        run = (
+            VehicleRun.objects.select_related("mission")
+            .filter(driver=request.user, mission__status="active")
+            .exclude(
+                status__in=[VehicleRun.STATUS_COMPLETED, VehicleRun.STATUS_CANCELLED]
+            )
+            .order_by("-id")
+            .first()
+        )
+        if run is None:
+            return Response({"run": None, "mission": None, "is_lead": False})
+        return Response(
+            {
+                "run": run.id,
+                "mission": run.mission_id,
+                "status": run.status,
+                "is_lead": run.is_lead,
+                "last_ping_at": run.last_ping_at,
+            }
+        )
+
+    def post(self, request):
+        from apps.ops import tracking as tracking_service
+        from apps.ops.models import VehicleRun
+
+        raw_run = request.data.get("run")
+        try:
+            run_id = int(raw_run)
+        except (TypeError, ValueError):
+            run_id = None
+        run = (
+            VehicleRun.objects.select_related("mission", "vehicle")
+            .filter(driver=request.user, pk=run_id)
+            .first()
+            if run_id is not None
+            else None
+        )
+        if run is None:
+            raise ValidationError({"run": "Choose a run assigned to you."})
+        if not tracking_service.can_ping(request.user, run):
+            raise PermissionDenied(
+                "Only the assigned driver may report this vehicle's position."
+            )
+        result = tracking_service.record_pings(
+            run, request.user, request.data.get("pings")
+        )
+        return Response(
+            {
+                "accepted": result["accepted"],
+                "rejected": result["rejected"],
+                "run": run.id,
+                "last_ping_at": run.last_ping_at,
+            }
         )
 
 

@@ -66,6 +66,46 @@ def test_the_pulse_repeats_an_unread_emergency_on_a_fresh_page(as_user, creator)
     assert quiet.id not in {row["id"] for row in body["urgent"]}
 
 
+def test_the_pulse_lists_a_new_message_although_it_is_not_urgent(as_user, creator):
+    """A phone in a pocket must hear about a message, not only an alarm.
+
+    ``urgent`` stays as it was for the desk; ``items`` is what the Android
+    watcher raises notifications from, and it cannot be filtered to the loud
+    priorities or messages and routine instructions never reach the phone.
+    """
+    first = action_notification(creator, title="Old news")
+    message = notify(
+        creator,
+        title="New message from Juan Dela Cruz",
+        message="Open Messages to read it.",
+        category="message",
+        priority="normal",
+        action_url="/messages?conversation=7",
+    )
+    routine = notify(creator, title="Trip sheet approved", priority="normal")
+
+    body = as_user(creator).get(f"/api/notifications/pulse/?since={first.id}").json()
+
+    assert body["urgent"] == []
+    assert [row["id"] for row in body["items"]] == [message.id, routine.id]
+    assert body["items"][0]["category"] == "message"
+    # The chat text is never part of the alert; the server sends a pointer.
+    assert "Open Messages" in body["items"][0]["message"]
+    assert routine.id not in {row["id"] for row in body["urgent"]}
+
+
+def test_the_pulse_does_not_repeat_an_item_the_phone_already_saw(as_user, creator):
+    first = action_notification(creator, title="Old news")
+    item = notify(creator, title="New message from Juan", category="message")
+
+    # The phone marks the watermark as it notifies, so the next poll is silent.
+    assert [row["id"] for row in as_user(creator).get(
+        f"/api/notifications/pulse/?since={first.id}"
+    ).json()["items"]] == [item.id]
+    body = as_user(creator).get(f"/api/notifications/pulse/?since={item.id}").json()
+    assert body["items"] == []
+
+
 def test_the_pulse_stays_quiet_about_items_already_read(as_user, creator):
     first = action_notification(creator)
     item = action_notification(creator, priority="urgent")

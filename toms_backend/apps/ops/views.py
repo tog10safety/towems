@@ -7693,6 +7693,27 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
                 for row in rows
             ]
 
+        # ``urgent`` is for a desk that is already looking at a screen. A phone
+        # in a pocket has to hear about everything the account receives - a
+        # direct message, a group chat, a routine instruction - so ``items``
+        # carries the new unread rows whatever their priority. The message body
+        # is a pointer ("Open Messages to read it."), never the chat text.
+        items = []
+        if since:
+            items = [
+                {
+                    "id": row.id,
+                    "title": row.title,
+                    "message": row.message,
+                    "level": row.level,
+                    "priority": row.priority,
+                    "category": row.category,
+                    "action_url": row.action_url,
+                    "created_at": row.created_at,
+                }
+                for row in base.filter(id__gt=since, is_read=False).order_by("id")[:10]
+            ]
+
         return Response(
             {
                 "latest_id": latest_id,
@@ -7705,6 +7726,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
                     ],
                 ).count(),
                 "urgent": urgent,
+                "items": items,
             }
         )
 

@@ -8,8 +8,9 @@ the authenticator seed on the device.
 
 So the shell exchanges a live, fully verified session for one narrow token:
 
-* it authenticates ``GET`` only, and only on the two endpoints the watcher
-  reads (the notification pulse and the message summary);
+* it authenticates ``GET`` on the two endpoints the watcher reads (the
+  notification pulse and the message summary) plus a single write - the driver's
+  own GPS breadcrumbs, while that driver's run is open - and nothing else;
 * only its SHA-256 digest is stored, so a database reader cannot replay it;
 * it is bound to the install that asked for it and to the session that minted
   it, and is revoked when that session ends (sign-out, device switch), when the
@@ -161,6 +162,23 @@ class DeviceTokenAuthentication(BaseAuthentication):
         return self.keyword
 
 
+class DeviceTokenTracking(BasePermission):
+    """The one write a token may make: the position of its own driver's vehicle.
+
+    Attached only to the phone's tracking endpoint, where ``tracking.can_ping``
+    still decides whether this account drives that run. A token copied off a
+    phone can therefore not move somebody else's vehicle, and can report nothing
+    at all once the run is closed.
+    """
+
+    message = "A phone alert token may only report its own driver's position."
+
+    def has_permission(self, request, view):
+        if isinstance(request.auth, DeviceToken):
+            return request.method in SAFE_METHODS or request.method == "POST"
+        return True
+
+
 class DeviceTokenReadOnly(BasePermission):
     """A device token may read; it can never write, even on its own endpoints."""
 
@@ -172,7 +190,7 @@ class DeviceTokenReadOnly(BasePermission):
         return True
 
 
-#: The alert endpoints accept the caller's session, a device token or a JWT.
+#: The alert and tracking endpoints accept a session, a device token or a JWT.
 ALERT_AUTHENTICATION = [
     DeviceTokenAuthentication,
     SessionAuthentication,

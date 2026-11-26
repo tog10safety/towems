@@ -44,6 +44,13 @@ urlpatterns = [
         views.DeviceTokenView.as_view(),
         name="auth-device-token",
     ),
+    # The phone's foreground location service: which run to record, and the
+    # breadcrumbs for it, without a browser session that dies after an hour.
+    path(
+        "auth/devices/tracking/",
+        views.DeviceTrackingView.as_view(),
+        name="auth-device-tracking",
+    ),
     path("auth/logout/", views.LogoutView.as_view(), name="auth-logout"),
     path("auth/me/", views.MeView.as_view(), name="auth-me"),
     path("auth/password/", views.ChangePasswordView.as_view(), name="auth-password"),
