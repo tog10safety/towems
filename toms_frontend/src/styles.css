@@ -9364,8 +9364,22 @@ span.flight-fuel-value {
   flex: none;
 }
 
-.bubble {
+/* The message bubble and its clock/actions share one column: the box holds
+   only the message, while the footer sits outside it. */
+.bubble-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   max-width: min(72%, 560px);
+  min-width: 0;
+}
+
+.bubble-row.mine .bubble-stack {
+  align-items: flex-end;
+}
+
+.bubble {
+  max-width: 100%;
   padding: 8px 11px;
   border-radius: 12px;
   background: var(--bg-elevated);
@@ -9386,11 +9400,9 @@ span.flight-fuel-value {
 }
 
 .bubble-meta {
-  display: block;
-  margin-top: 4px;
   font-size: 10px;
-  text-align: right;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* Reply, mention and unsend in a thread */
@@ -9430,17 +9442,34 @@ span.flight-fuel-value {
   white-space: nowrap;
 }
 
-.bubble-actions {
+.bubble-foot {
   display: flex;
-  gap: 10px;
-  margin-top: 4px;
+  align-items: center;
+  gap: 2px;
+  margin-top: 3px;
+  padding: 0 2px;
+  color: var(--text-muted);
 }
 
-.bubble-actions .msg-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  font-size: 10px;
+.bubble-row.mine .bubble-foot {
+  flex-direction: row-reverse;
+}
+
+.bubble-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.bubble-actions .bubble-action {
+  padding: 2px 4px;
+  border-radius: 5px;
+  color: var(--text-muted);
+}
+
+.bubble-actions .bubble-action:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
 }
 
 .mention {

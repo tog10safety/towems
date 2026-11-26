@@ -68,6 +68,26 @@ def private_messaging_enabled() -> bool:
         return False
 
 
+def _rank_order(field: str = "rank"):
+    """Rank from GEN down to AM, with unknown text last.
+
+    ``rank`` is free text, so the database cannot order it meaningfully; a Case
+    maps each permitted rank to its position in the personnel picker's order.
+    """
+    from django.db.models import Case, IntegerField, Value, When
+
+    from apps.accounts.personnel_details import RANK_OPTIONS
+
+    return Case(
+        *[
+            When(**{field: rank}, then=Value(position))
+            for position, rank in enumerate(RANK_OPTIONS)
+        ],
+        default=Value(len(RANK_OPTIONS)),
+        output_field=IntegerField(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
@@ -461,7 +481,7 @@ def unit_group_members(conversation, actor):
     people = (
         User.objects.filter(is_active=True, unit_id=conversation.unit_id)
         .select_related("profile", "unit")
-        .order_by("last_name", "first_name", "id")
+        .order_by(_rank_order(), "last_name", "first_name", "id")
     )
     admin_ids = unit_group_admin_ids(conversation.unit_id)
     member_rows = {
@@ -478,6 +498,39 @@ def unit_group_members(conversation, actor):
         )
         for person in people
     ]
+
+
+def unit_group_view_roster(conversation, viewer):
+    """The people who can see a unit channel, highest rank first.
+
+    Any member who can open the channel may read this list; the View/Post
+    controls stay with the management roster the Operations Center uses.
+    """
+    from apps.accounts.models import User
+
+    people = (
+        User.objects.filter(is_active=True, unit_id=conversation.unit_id)
+        .select_related("profile", "unit")
+        .order_by(_rank_order(), "last_name", "first_name", "id")
+    )
+    admin_ids = unit_group_admin_ids(conversation.unit_id)
+    member_rows = {
+        row.user_id: row
+        for row in ConversationMember.objects.filter(conversation=conversation)
+    }
+    rows = []
+    for person in people:
+        payload = group_member_payload(
+            conversation,
+            person,
+            viewer,
+            is_admin=person.id in admin_ids,
+            member=member_rows.get(person.id),
+        )
+        # A member the Operations Center hid must not appear in the roster.
+        if payload["can_view"]:
+            rows.append(payload)
+    return rows
 
 
 def update_group_member(conversation, actor, target, *, can_view=None, can_post=None):
@@ -665,14 +718,14 @@ def conversation_people(conversation, viewer):
             User.objects.filter(is_active=True, unit_id=conversation.unit_id)
             .exclude(pk=viewer.id)
             .exclude(pk__in=hidden)
-            .order_by("last_name", "first_name", "id")
+            .order_by(_rank_order(), "last_name", "first_name", "id")
         )
     return (
         User.objects.filter(
             is_active=True, messaging_memberships__conversation=conversation
         )
         .exclude(pk=viewer.id)
-        .order_by("last_name", "first_name", "id")
+        .order_by(_rank_order(), "last_name", "first_name", "id")
         .distinct()
     )
 
@@ -688,7 +741,12 @@ def conversation_roster(conversation):
             conversation=conversation, user__is_active=True
         )
         .select_related("user")
-        .order_by("user__last_name", "user__first_name", "user__id")
+        .order_by(
+            _rank_order("user__rank"),
+            "user__last_name",
+            "user__first_name",
+            "user__id",
+        )
     )
 
 

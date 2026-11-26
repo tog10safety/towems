@@ -55,6 +55,12 @@ const PATHS = {
       <path d="M8.5 10h7M8.5 13.5h4" />
     </>
   ),
+  reply: (
+    <>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h9.5a5.5 5.5 0 0 1 0 11H9" />
+    </>
+  ),
   personnel: (
     <>
       <circle cx="9" cy="8" r="3.2" />

@@ -151,6 +151,8 @@ export default function MessagesPage() {
   const [membersOpen, setMembersOpen] = useState(false);
   const [members, setMembers] = useState([]);
   const [membersLoading, setMembersLoading] = useState(false);
+  // Only the unit channel's Operations Center may change View/Post.
+  const [memberCanManage, setMemberCanManage] = useState(false);
   const [memberSavingId, setMemberSavingId] = useState(null);
   const [memberNotice, setMemberNotice] = useState("");
 
@@ -581,20 +583,15 @@ export default function MessagesPage() {
     setMemberNotice("");
     setMembersLoading(true);
     try {
-      // The unit channel is administered through its own roster endpoint; an
-      // approved group only needs the read-only list of its participants.
-      const path = isCustomGroup
-        ? `/messaging/conversations/${activeId}/members/`
-        : "/messaging/unit-group/members/";
-      const data = await api.get(path);
+      // Every group chat exposes its roster; the response also says whether
+      // this viewer may edit the unit channel's View/Post permissions.
+      const data = await api.get(`/messaging/conversations/${activeId}/members/`);
       setMembers(data.members || []);
+      setMemberCanManage(Boolean(data.can_manage));
     } catch (err) {
-      setMemberNotice(
-        err.message ||
-          (isCustomGroup
-            ? "Unable to load the group members."
-            : "Unable to load the unit roster.")
-      );
+      setMembers([]);
+      setMemberCanManage(false);
+      setMemberNotice(err.message || "Unable to load the group members.");
     } finally {
       setMembersLoading(false);
     }
@@ -964,12 +961,7 @@ export default function MessagesPage() {
                   )}
                 </span>
               </div>
-              {isCustomGroup && (
-                <Button variant="ghost" size="sm" onClick={openMembers}>
-                  Members
-                </Button>
-              )}
-              {isUnitGroup && (thread?.is_admin || activeConversation?.is_admin) && (
+              {(isUnitGroup || isCustomGroup) && (
                 <Button variant="ghost" size="sm" onClick={openMembers}>
                   Members
                 </Button>
@@ -998,8 +990,10 @@ export default function MessagesPage() {
                     <strong>{isUnitGroup ? "Unit chat members" : "Group chat members"}</strong>
                     <p className="hint">
                       {isUnitGroup
-                        ? "The Operations Center controls who can see and post in this unit channel. Administrators and the Operations Center always keep access."
-                        : "The personnel selected for this group and the approvers who admitted them can see it."}
+                        ? memberCanManage
+                          ? "The Operations Center controls who can see and post in this unit channel. Administrators and the Operations Center always keep access."
+                          : "Everyone in this unit who can see the channel, highest rank first. The Operations Center manages these permissions."
+                        : "The personnel selected for this group and the approvers who admitted them can see it, highest rank first."}
                     </p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => setMembersOpen(false)}>
@@ -1025,7 +1019,7 @@ export default function MessagesPage() {
                             {member.is_self ? " · You" : ""}
                           </span>
                         </span>
-                        {isUnitGroup && (
+                        {isUnitGroup && memberCanManage && (
                           <>
                             <label className="check-row">
                               <input
@@ -1110,6 +1104,7 @@ export default function MessagesPage() {
                             {initials(message.sender)}
                           </span>
                         )}
+                        <div className="bubble-stack">
                         <div className={`bubble ${message.is_unsent ? "is-unsent" : ""}`}>
                           {isGroup && !message.is_mine && (
                             <span className="bubble-sender">
@@ -1135,6 +1130,10 @@ export default function MessagesPage() {
                           ) : (
                             <p>{renderMentions(message.body, message.mentions)}</p>
                           )}
+                        </div>
+                        {/* The clock and actions sit outside the bubble, so
+                            the box itself only carries the message. */}
+                        <div className="bubble-foot">
                           <span className="bubble-meta">
                             {message.is_unsent
                               ? `${
@@ -1158,23 +1157,28 @@ export default function MessagesPage() {
                               {canPost && (
                                 <button
                                   type="button"
-                                  className="msg-link"
+                                  className="icon-btn bubble-action"
                                   onClick={() => startReply(message)}
+                                  aria-label="Reply to this message"
+                                  title="Reply"
                                 >
-                                  Reply
+                                  <Icon name="reply" size={13} />
                                 </button>
                               )}
                               {message.can_unsend && (
                                 <button
                                   type="button"
-                                  className="msg-link"
+                                  className="icon-btn bubble-action"
                                   onClick={() => unsendMessage(message)}
+                                  aria-label="Unsend this message"
+                                  title="Unsend"
                                 >
-                                  Unsend
+                                  <Icon name="trash" size={13} />
                                 </button>
                               )}
                             </div>
                           )}
+                        </div>
                         </div>
                       </div>
                     </div>

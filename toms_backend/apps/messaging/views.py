@@ -290,24 +290,33 @@ class MessageUnsendView(MessagingBaseView):
 
 
 class ConversationMembersView(MessagingBaseView):
-    """Read-only roster of an approved group chat for its participants."""
+    """Roster of a group chat for everyone who can open it.
+
+    Rank order is the same everywhere personnel are listed (GEN first, AM
+    last). ``can_manage`` says whether this viewer may edit the unit channel's
+    View/Post permissions, which the roster renders only for them.
+    """
 
     def get(self, request, pk):
         conversation = self.conversation(request, pk)
-        if not conversation.is_custom_group():
+        if conversation.is_group_request():
             return Response(
-                {"detail": "Members are listed for approved group chats."},
+                {"detail": "A group chat request's participants are its thread."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        rows = services.conversation_roster(conversation)
-        return Response(
-            {
-                "members": [
-                    serializers.conversation_member_payload(row, request.user.id)
-                    for row in rows
-                ]
-            }
-        )
+        if conversation.is_unit_group():
+            members = services.unit_group_view_roster(conversation, request.user)
+            can_manage = services.is_unit_group_admin(
+                request.user, conversation.unit_id
+            )
+        else:
+            rows = services.conversation_roster(conversation)
+            members = [
+                serializers.conversation_member_payload(row, request.user.id)
+                for row in rows
+            ]
+            can_manage = False
+        return Response({"members": members, "can_manage": can_manage})
 
 
 class ConversationPeopleView(MessagingBaseView):
