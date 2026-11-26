@@ -60,4 +60,11 @@
     <!-- The driver page records the vehicle's position only while a run is open. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- A run outlasts a screen: without background location the tracker stops
+         reporting the moment the phone locks. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Android freezes background apps to save battery. The watcher asks the
+         person, in plain words, to exempt TOWEMS so an abort order still arrives
+         at 03:00 on a phone that has been idle for hours. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 </manifest>

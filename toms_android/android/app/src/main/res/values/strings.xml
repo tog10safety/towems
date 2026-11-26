@@ -4,4 +4,14 @@
     <string name="title_activity_main">TOWEMS</string>
     <string name="package_name">online.mrmsystem.towems</string>
     <string name="custom_url_scheme">online.mrmsystem.towems</string>
+
+    <!-- First-run explanations: each one says what the permission buys, because
+         an unexplained system dialog is what people refuse. -->
+    <string name="setup_battery_title">Keep alerts arriving</string>
+    <string name="setup_battery_message">Android pauses background apps to save battery, which can silence TOWEMS alerts and stop the driver tracker while the screen is off.\n\nAllow TOWEMS to run without battery restrictions. On Xiaomi, Huawei, Oppo and vivo phones, also switch on Autostart for TOWEMS in Settings.</string>
+    <string name="setup_location_title">Keep tracking with the screen off</string>
+    <string name="setup_location_message">The driver tracker reports the vehicle position during a run. If TOWEMS may only use location while it is open, tracking stops as soon as the phone locks.\n\nOn the next screen choose Allow all the time.</string>
+    <string name="setup_allow">Allow</string>
+    <string name="setup_later">Not now</string>
+    <string name="setup_app_info">App info</string>
 </resources>
