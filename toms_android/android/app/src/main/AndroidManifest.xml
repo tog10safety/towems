@@ -30,6 +30,13 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- The driver's position, recorded natively so a locked screen does not
+             stop it. Started only while a run is open. -->
+        <service
+            android:name=".TrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -56,6 +63,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- The driver page records the vehicle's position only while a run is open. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

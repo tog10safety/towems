@@ -12,6 +12,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.util.Log;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -41,12 +46,18 @@ public class MainActivity extends BridgeActivity {
 
     /** At most one setup dialog per launch, so two never stack on top of each other. */
     private boolean promptShownThisLaunch;
+    /** The strip that says whether this phone can actually receive anything. */
+    private WatcherBar watcherBar;
+    /** Capacitor installs its page view a moment after onCreate on some builds. */
+    private int attachAttempts;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        attachWatcherBar();
         boolean askingForNotifications = askForNotifications();
         startWatcher();
+        TrackingService.startIfPermitted(this);
         openPathFrom(getIntent());
         // A cold start is a deliberate visit, so this is where the setup
         // explanations belong: returning from a settings screen (onResume) must
@@ -65,6 +76,9 @@ public class MainActivity extends BridgeActivity {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
             promptShownThisLaunch = false;
+            if (watcherBar != null) {
+                watcherBar.refresh();
+            }
             askForReliability();
         }
     }
@@ -82,7 +96,12 @@ public class MainActivity extends BridgeActivity {
         // The in-app bell already polls while a screen is open; the service must
         // stay quiet then, or every alert arrives twice.
         AlertService.appVisible = true;
+        attachWatcherBar();
         startWatcher();
+        TrackingService.startIfPermitted(this);
+        if (watcherBar != null) {
+            watcherBar.refresh();
+        }
     }
 
     @Override
@@ -91,9 +110,55 @@ public class MainActivity extends BridgeActivity {
         super.onPause();
     }
 
+    /**
+     * Start the watcher, or ask the running one to poll now.
+     *
+     * The immediate check matters for the strip: coming back to the app should
+     * show a fresh "checked just now" rather than the last round trip from
+     * however long ago the phone was in a pocket.
+     */
     private void startWatcher() {
-        Intent service = new Intent(this, AlertService.class);
+        Intent service = new Intent(this, AlertService.class)
+                .setAction(AlertService.ACTION_CHECK_NOW);
         ContextCompat.startForegroundService(this, service);
+    }
+
+    /**
+     * Put the watcher's state above the web app.
+     *
+     * The bar is a sibling of the page rather than a layer over it, and the page
+     * keeps its own insets: the site's header is the first thing a person needs,
+     * and a floating banner would cover it exactly when something is wrong.
+     */
+    private void attachWatcherBar() {
+        if (watcherBar != null) {
+            return;
+        }
+        ViewGroup content = findViewById(android.R.id.content);
+        if (content == null || content.getChildCount() == 0) {
+            // The page view is not in the hierarchy yet on the first frames; a
+            // short retry beats a strip that silently never appears.
+            if (content != null && attachAttempts++ < 20) {
+                content.postDelayed(this::attachWatcherBar, 100);
+            }
+            return;
+        }
+        final View host = content.getChildAt(0);
+        Log.i("TOWEMS/WatcherBar", "attaching above " + host.getClass().getSimpleName());
+        WatcherBar bar = new WatcherBar(this);
+        content.addView(bar, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP));
+        bar.addOnLayoutChangeListener(
+                (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                    int wanted = bar.getHeight();
+                    if (host.getPaddingTop() != wanted) {
+                        host.setPadding(host.getPaddingLeft(), wanted,
+                                host.getPaddingRight(), host.getPaddingBottom());
+                    }
+                });
+        watcherBar = bar;
     }
 
     /** Returns true when a permission dialog was just put on screen. */

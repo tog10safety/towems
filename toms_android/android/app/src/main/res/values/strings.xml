@@ -14,4 +14,62 @@
     <string name="setup_allow">Allow</string>
     <string name="setup_later">Not now</string>
     <string name="setup_app_info">App info</string>
+
+    <!-- The strip above the web app: whether this phone can really be reached.
+         A person who hears nothing has no other way to tell a quiet account from
+         a silenced watcher. -->
+    <string name="watcher_live_title">Watcher is live</string>
+    <string name="watcher_live_detail">Checked %1$s. Alerts and messages arrive here.</string>
+    <string name="watcher_blocked_title">Notifications are off</string>
+    <string name="watcher_blocked_detail">Android is blocking TOWEMS alerts. Tap to allow them.</string>
+    <string name="watcher_no_token_title">No alert key yet</string>
+    <string name="watcher_no_token_detail">Sign in to TOWEMS; the watcher trades that sign-in for its own key.</string>
+    <string name="watcher_signing_in_title">Watcher is signing in</string>
+    <string name="watcher_signing_in_detail">Asking the server for this phone\'s alert key.</string>
+    <string name="watcher_stopped_title">Watcher is not running</string>
+    <string name="watcher_stopped_detail">Tap to start it. Alerts cannot arrive while it is off.</string>
+    <string name="watcher_offline_title">No reply from TOWEMS</string>
+    <string name="watcher_offline_detail">Last reply %1$s. Retrying every 20 seconds.</string>
+    <string name="watcher_offline_never">The server has never answered this phone yet. Check the connection.</string>
+    <string name="watcher_starting_title">Watcher is starting</string>
+    <string name="watcher_starting_detail">The first check with the server is in progress.</string>
+
+    <string name="watcher_test">TEST</string>
+    <string name="watcher_send_test">Send test notification</string>
+    <string name="watcher_test_title">Test notification</string>
+    <string name="watcher_test_text">If this appeared and the phone buzzed, alerts can reach you.</string>
+    <string name="watcher_test_sent">Test notification sent. Look at the notification shade.</string>
+    <string name="watcher_test_blocked">Notifications are blocked. Allow them first.</string>
+    <string name="watcher_check_now">Check now</string>
+    <string name="watcher_checking">Asking the server…</string>
+    <string name="watcher_settings">Notification settings</string>
+    <string name="watcher_close">Close</string>
+    <string name="watcher_dialog_title">Alert watcher</string>
+
+    <string name="watcher_line_watcher">Watcher: %1$s</string>
+    <string name="watcher_line_notifications">Notifications: %1$s</string>
+    <string name="watcher_line_key">Alert key: %1$s</string>
+    <string name="watcher_line_server">Last server reply: %1$s</string>
+    <string name="watcher_line_battery">Battery restrictions: %1$s</string>
+    <string name="watcher_line_error">Last error: %1$s</string>
+    <string name="watcher_running">running</string>
+    <string name="watcher_off">off</string>
+    <string name="watcher_allowed">allowed</string>
+    <string name="watcher_blocked_value">blocked</string>
+    <string name="watcher_silenced">silenced in Settings</string>
+    <string name="watcher_present">present</string>
+    <string name="watcher_missing">missing</string>
+    <string name="watcher_exempt">exempt</string>
+    <string name="watcher_restricted">restricted</string>
+    <string name="watcher_never">never</string>
+    <string name="watcher_ago">%1$s ago</string>
+    <string name="watcher_just_now">just now</string>
+
+    <!-- The driver's own tracker: the board is following this phone. -->
+    <string name="tracking_channel_name">Driver tracking</string>
+    <string name="tracking_channel_description">Reports the vehicle position while a run is open.</string>
+    <string name="tracking_title">Vehicle position</string>
+    <string name="tracking_idle_text">Starts reporting when a run opens.</string>
+    <string name="tracking_active_text">Sharing this vehicle\'s position.</string>
+    <string name="tracking_active_subtext">The board follows this phone, screen off or on.</string>
 </resources>

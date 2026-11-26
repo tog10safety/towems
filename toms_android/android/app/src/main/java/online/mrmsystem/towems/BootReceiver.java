@@ -26,5 +26,9 @@ public class BootReceiver extends BroadcastReceiver {
             // Android 15 refuses a boot-started data-sync service on some builds.
             // The watcher starts again on the next launch; nothing is lost.
         }
+        // A reboot during a convoy must not leave the board blind. The tracker
+        // starts only where location was already granted, and records nothing
+        // until the server says a run is open.
+        TrackingService.startIfPermitted(context);
     }
 }
