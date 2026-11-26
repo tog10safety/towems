@@ -194,6 +194,10 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = int(env("TOMS_SESSION_AGE", "3600"))
+#: How long a phone's read-only alert token outlives its session. It is not a
+#: session: it only reads the notification pulse and the message count, and is
+#: revoked on sign-out, password change and expiry.
+DEVICE_TOKEN_AGE_DAYS = int(env("TOMS_DEVICE_TOKEN_AGE_DAYS", "30"))
 
 CSRF_COOKIE_HTTPONLY = False  # the SPA reads it to set the X-CSRFToken header
 CSRF_COOKIE_SAMESITE = "Lax"

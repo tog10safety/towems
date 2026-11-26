@@ -535,3 +535,47 @@ class DeviceSession(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id} on {self.device_label or 'a device'}"
+
+
+class DeviceToken(models.Model):
+    """A long-lived, read-only credential for one phone's alert watcher.
+
+    Django sessions last an hour by design, which is right for a browser and
+    useless for a watcher that has to wake somebody at 03:00. The app exchanges
+    its live session for one of these once (:mod:`apps.accounts.device_tokens`),
+    and the token only ever reads the notification pulse and the message
+    summary. Only the SHA-256 digest is stored. The row dies with the session
+    that minted it, on a password change or reset, and on expiry.
+    """
+
+    user = models.ForeignKey(
+        "accounts.User",
+        db_column="user_id",
+        on_delete=models.CASCADE,
+        db_constraint=False,
+        related_name="device_tokens",
+    )
+    #: The install's own random identifier, so re-minting rotates one row.
+    device_id = models.CharField(max_length=64)
+    #: The session the token was minted from, so ending that session ends it.
+    session_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    token_hash = models.CharField(max_length=64, unique=True)
+    label = models.CharField(max_length=80, blank=True, default="")
+    user_agent = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "accounts_device_token"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "device_id"],
+                name="acct_device_token_per_install",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Device token for {self.user_id} ({self.label or self.device_id})"

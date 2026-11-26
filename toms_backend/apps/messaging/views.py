@@ -24,6 +24,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts import ownership
+from apps.accounts.device_tokens import ALERT_AUTHENTICATION, DeviceTokenReadOnly
 from apps.accounts.models import User
 from apps.core.audit import log_action
 from apps.core.csrf import enforce_csrf
@@ -452,7 +453,14 @@ class PushUnsubscribeView(MessagingBaseView):
 
 
 class MessagingSummaryView(MessagingBaseView):
-    """The nav badge: how many messages are waiting, and in how many threads."""
+    """The nav badge: how many messages are waiting, and in how many threads.
+
+    Also the Android watcher's only messaging call: it reads the count, never a
+    message, so a phone alert says only that something is waiting.
+    """
+
+    authentication_classes = ALERT_AUTHENTICATION
+    permission_classes = [IsAuthenticated, DeviceTokenReadOnly]
 
     def get(self, request):
         enabled = services.private_messaging_enabled()

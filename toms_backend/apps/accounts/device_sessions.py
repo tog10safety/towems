@@ -220,20 +220,26 @@ def remember(user, request, session_key: str) -> None:
 
 
 def forget(session_key: str | None) -> None:
-    """Drop the row for a session that has just ended."""
+    """Drop the row and the alert tokens for a session that has just ended."""
+    from apps.accounts import device_tokens
     from apps.accounts.models import DeviceSession
 
     if not session_key:
         return
     DeviceSession.objects.filter(session_key=session_key).delete()
+    # A phone that signed in through this session stops receiving alerts when
+    # the person signs out, rather than tomorrow when its token expires.
+    device_tokens.revoke_for_session(session_key)
 
 
 def end_session(session_key: str) -> None:
-    """End one session everywhere: Django's table and the device row."""
+    """End one session everywhere: Django's table, the device row and its tokens."""
+    from apps.accounts import device_tokens
     from apps.accounts.models import DeviceSession
 
     Session.objects.filter(session_key=session_key).delete()
     DeviceSession.objects.filter(session_key=session_key).delete()
+    device_tokens.revoke_for_session(session_key)
 
 
 def end_others(user, *, keep_key: str | None = None) -> int:

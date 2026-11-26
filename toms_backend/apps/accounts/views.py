@@ -15,19 +15,28 @@ from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status, viewsets
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts import device_sessions, mfa, ownership, setup_gate, unit_changes
+from apps.accounts import (
+    device_sessions,
+    device_tokens,
+    mfa,
+    ownership,
+    setup_gate,
+    unit_changes,
+)
 from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, UnitChangeRequest, User
 from apps.accounts.models import PasswordResetToken
 from apps.accounts.serializers import (
     AdminUserSerializer,
     AdminUserUpdateSerializer,
     ChangePasswordSerializer,
+    DeviceTokenRequestSerializer,
     LoginSerializer,
     MFACodeSerializer,
     MFAChallengeSerializer,
@@ -483,6 +492,46 @@ class DeviceSessionListView(APIView):
         return Response(payload)
 
 
+class DeviceTokenView(APIView):
+    """Hand the phone's alert watcher its long-lived, read-only token.
+
+    Reached only with the live WebView session, which has already passed the
+    password, the authenticator and the first-sign-in gates. The token it
+    returns cannot be used to mint another one, cannot write, and dies when
+    that session ends - so the web login itself is never extended.
+    """
+
+    permission_classes = [IsAuthenticated]
+    # Session only: a device token must never be able to renew itself.
+    authentication_classes = [SessionAuthentication]
+
+    def post(self, request):
+        serializer = DeviceTokenRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        raw, row = device_tokens.issue(
+            request.user,
+            device_id=data["device_id"],
+            label=data.get("label") or "Android phone",
+            user_agent=request.META.get("HTTP_USER_AGENT") or "",
+            session_key=request.session.session_key or "",
+        )
+        log_action(
+            actor=request.user,
+            action="issue_device_token",
+            entity_type="auth",
+            entity_id=request.user.id,
+            after={"device_id": row.device_id, "expires_at": row.expires_at.isoformat()},
+            # The value itself is never logged: it is a credential.
+            note="Alert watcher token issued",
+            request=request,
+        )
+        return Response(
+            {"token": raw, "expires_at": row.expires_at, "label": row.label},
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class SetupAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Issue an API token only to an account that has finished its setup.
 
@@ -552,6 +601,9 @@ class ChangePasswordView(APIView):
         user.set_password(serializer.validated_data["new_password"])
         user.save()
         update_session_auth_hash(request, user)
+        # A new password means every credential derived from the old one goes:
+        # the phone re-mints its alert token the next time it is opened.
+        device_tokens.revoke_all(user)
         setup_gate.sync_session(user, getattr(request, "session", None))
         log_action(
             actor=user,
@@ -637,6 +689,10 @@ class PasswordResetView(APIView):
 
         token.used_at = timezone.now()
         token.save(update_fields=["used_at"])
+        # Sessions are invalidated by the password hash change; the phone's
+        # read-only token is not session-bound in the request path, so end it
+        # here as well.
+        device_tokens.revoke_all(user)
 
         log_action(
             actor=user,

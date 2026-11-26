@@ -22,6 +22,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.device_tokens import ALERT_AUTHENTICATION, DeviceTokenReadOnly
 from apps.accounts.models import User
 from apps.core import geo, roles
 from apps.core.audit import AuditedModelViewSetMixin, log_action, snapshot
@@ -7634,7 +7635,14 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             }
         )
 
-    @action(detail=False, methods=["get"])
+    # The Android watcher polls this without a browser session, using the
+    # read-only token it exchanged from one. ``summary`` stays browser-only.
+    @action(
+        detail=False,
+        methods=["get"],
+        authentication_classes=ALERT_AUTHENTICATION,
+        permission_classes=[IsAuthenticated, DeviceTokenReadOnly],
+    )
     def pulse(self, request):
         """A cheap "is anything new?" check the bell asks while a screen is open.
 

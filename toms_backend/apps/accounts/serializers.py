@@ -870,3 +870,16 @@ class UnitChangeRequestSerializer(serializers.ModelSerializer):
             "decided_at",
             "created_at",
         ]
+
+
+class DeviceTokenRequestSerializer(serializers.Serializer):
+    """What the Android shell sends once, with its live session.
+
+    ``device_id`` is generated on the phone and never leaves it apart from this
+    call, so re-minting rotates one row instead of piling up tokens.
+    """
+
+    device_id = serializers.RegexField(r"^[A-Za-z0-9_-]{8,64}$", max_length=64)
+    label = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )

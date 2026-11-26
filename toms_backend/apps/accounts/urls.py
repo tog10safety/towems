@@ -37,6 +37,13 @@ urlpatterns = [
         views.DeviceSessionListView.as_view(),
         name="auth-devices",
     ),
+    # The Android shell's alert watcher exchanges its live session for one
+    # narrow, long-lived token that only reads the pulse and message summary.
+    path(
+        "auth/devices/token/",
+        views.DeviceTokenView.as_view(),
+        name="auth-device-token",
+    ),
     path("auth/logout/", views.LogoutView.as_view(), name="auth-logout"),
     path("auth/me/", views.MeView.as_view(), name="auth-me"),
     path("auth/password/", views.ChangePasswordView.as_view(), name="auth-password"),
