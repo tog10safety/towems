@@ -213,6 +213,9 @@ public class AlertService extends Service {
         alerts.setDescription("Abort orders, emergencies, movement tasks and approvals.");
         alerts.enableVibration(true);
         alerts.setVibrationPattern(VIBRATION);
+        // The launcher needs the channel's permission before it may badge the
+        // icon at all; the number itself comes from Badges and the notification.
+        alerts.setShowBadge(true);
         manager.createNotificationChannel(alerts);
 
         NotificationChannel messages = new NotificationChannel(
@@ -222,6 +225,7 @@ public class AlertService extends Service {
         messages.setVibrationPattern(VIBRATION);
         // One line, on a locked screen, without the conversation itself.
         messages.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
+        messages.setShowBadge(true);
         manager.createNotificationChannel(messages);
 
         // The first release's silent channels, removed so Settings shows one
@@ -271,6 +275,7 @@ public class AlertService extends Service {
             }
         }
         if (token == null) {
+            Badges.set(this, 0);
             recordFailure(0, null);
             return SIGNED_OUT_MS;
         }
@@ -282,6 +287,7 @@ public class AlertService extends Service {
             forgetToken();
             token = session == null ? null : mint(cookie, session);
             if (token == null) {
+                Badges.set(this, 0);
                 recordFailure(0, null);
                 return SIGNED_OUT_MS;
             }
@@ -302,6 +308,13 @@ public class AlertService extends Service {
         if (urgent == null) {
             urgent = pulse.optJSONArray("urgent");
         }
+        // The launcher's number is the account's real unread count, not the
+        // number of banners still in the shade; the server computes it, so it
+        // also falls back to zero once everything has been read.
+        int unread = pulse.has("unread")
+                ? pulse.optInt("unread", 0)
+                : (urgent == null ? 0 : urgent.length());
+        Badges.set(this, unread);
         if (!firstRun && !appVisible && urgent != null) {
             for (int index = 0; index < urgent.length(); index += 1) {
                 JSONObject row = urgent.optJSONObject(index);
@@ -313,7 +326,7 @@ public class AlertService extends Service {
                     continue;
                 }
                 seen.add(id);
-                showAlert(row);
+                showAlert(row, unread);
             }
         }
         // The first poll only establishes a baseline: opening the app for the
@@ -344,6 +357,9 @@ public class AlertService extends Service {
             return;
         }
         int unread = summary.optInt("unread_total", 0);
+        // The pulse cannot provide a count on this server version, so the
+        // message total is the only number the icon can carry.
+        Badges.set(this, unread);
         int previous = prefs.getInt("unread_total", -1);
         prefs.edit().putInt("unread_total", unread).apply();
         if (unread <= 0) {
@@ -376,7 +392,7 @@ public class AlertService extends Service {
      * is "Open Messages to read it.", so nothing from the conversation itself
      * ever reaches the lock screen.
      */
-    private void showAlert(JSONObject row) {
+    private void showAlert(JSONObject row, int unread) {
         String title = row.optString("title", "TOWEMS");
         String message = row.optString("message", "");
         String path = row.optString("action_url", "/notifications");
@@ -388,6 +404,7 @@ public class AlertService extends Service {
                 .setSmallIcon(R.drawable.ic_stat_towems)
                 .setContentTitle(title.length() > 120 ? title.substring(0, 120) : title)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
+                .setNumber(unread)
                 .setAutoCancel(true)
                 .setPriority(urgent ? NotificationCompat.PRIORITY_MAX : NotificationCompat.PRIORITY_HIGH)
                 .setCategory(messageRow
