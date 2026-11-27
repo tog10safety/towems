@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, qs } from "../api/client.js";
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -251,19 +251,21 @@ export default function MessagesPage() {
     return () => clearInterval(timer);
   }, [loadConversations]);
 
-  // A notification links here with ?conversation=<id>.
+  // A notification links here with ?conversation=<id>. React may already have
+  // this page mounted when the next notification is opened, so this also has
+  // to answer later navigations, not only the first mount.
   useEffect(() => {
     const requested = Number(searchParams.get("conversation") || 0);
-    if (requested) {
-      setActiveId(requested);
-      setThreadLoading(true);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("conversation");
-      window.history.replaceState({}, "", url);
-    }
-    // Only on first mount: later selection is driven by the list itself.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!requested) return;
+    setActiveId(requested);
+    setMessages([]);
+    setThread(null);
+    setThreadLoading(true);
+    setThreadError("");
+    const next = new URLSearchParams(searchParams);
+    next.delete("conversation");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // --- open thread, live ---------------------------------------------------
   useEffect(() => {
@@ -304,18 +306,26 @@ export default function MessagesPage() {
       }
     }
 
-    refresh(false).then(() => {
-      if (autoScroll.current) {
-        const element = bodyRef.current;
-        if (element) element.scrollTop = element.scrollHeight;
-      }
-    });
+    refresh(false);
     const timer = setInterval(() => refresh(true), THREAD_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
   }, [activeId, threadTerm, loadThread, markRead]);
+
+  // Land on the newest bubble once the messages are actually in the DOM. The
+  // fetch callback used to set scrollTop straight after setMessages, before
+  // React had committed the thread, so opening a chat stayed at the oldest
+  // message and the new one was below the fold. Keying on the newest id also
+  // leaves "Load earlier messages" alone, because prepending keeps that id.
+  const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
+  useLayoutEffect(() => {
+    if (!activeId || !autoScroll.current) return;
+    const element = bodyRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  }, [activeId, lastMessageId]);
 
   // --- people picker -------------------------------------------------------
   useEffect(() => {
