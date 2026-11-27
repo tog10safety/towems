@@ -511,12 +511,6 @@ class DashboardView(APIView):
             if stock.fuel_form == "drum":
                 fuel_drums += int(stock.quantity_available or 0)
 
-        unread = Notification.objects.filter(recipient_id=user.id, is_read=False).count()
-        pending_actions = Notification.objects.filter(
-            recipient_id=user.id,
-            requires_action=True,
-            action_status__in=[Notification.ACTION_OPEN, Notification.ACTION_IN_PROGRESS],
-        ).count()
         recent = AuditLog.objects.select_related("actor").order_by("-created_at", "-id")[:10]
 
         return Response(
@@ -589,7 +583,6 @@ class DashboardView(APIView):
                 },
                 # Present only for a Unit Safety Officer; scoped to their own unit.
                 "safety": _safety_analytics(user),
-                "notifications": {"unread": unread, "pending_actions": pending_actions},
                 "scope": {
                     "unit_id": user.unit_id,
                     "unit_name": user.unit.name if user.unit_id else "",
