@@ -78,6 +78,34 @@ def test_the_bell_can_leave_private_messages_out(as_user, creator):
     assert summary["total"] == 1
 
 
+def test_the_system_inbox_hides_messages_unless_asked(as_user, creator):
+    """Message notices are out of the list and the counts by default."""
+    system = action_notification(
+        creator, title="System notice", requires_action=False
+    )
+    message = notify(
+        creator,
+        title="New message from Juan Dela Cruz",
+        message="Open Messages to read it.",
+        category="message",
+    )
+    client = as_user(creator)
+
+    listed = client.get("/api/notifications/?page_size=50").json()
+    ids = {row["id"] for row in listed["results"]}
+    assert system.id in ids
+    assert message.id not in ids
+
+    summary = client.get("/api/notifications/summary/").json()
+    assert summary["unread"] == 1
+    assert summary["total"] == 1
+
+    opted = client.get("/api/notifications/?include_messages=true").json()
+    assert message.id in {row["id"] for row in opted["results"]}
+    opted_summary = client.get("/api/notifications/summary/?include_messages=true").json()
+    assert opted_summary["total"] == 2
+
+
 def test_mark_all_read_leaves_private_messages_unread(as_user, creator):
     """The system inbox's bulk action must not touch messages it cannot show."""
     system = action_notification(creator, title="System notice")
@@ -89,11 +117,8 @@ def test_mark_all_read_leaves_private_messages_unread(as_user, creator):
     )
     client = as_user(creator)
 
-    response = client.post(
-        "/api/notifications/mark-all-read/?exclude_category=message",
-        {},
-        format="json",
-    )
+    # No include_messages: the default inbox is what this action covers.
+    response = client.post("/api/notifications/mark-all-read/", {}, format="json")
     assert response.status_code == 200
     system.refresh_from_db()
     message.refresh_from_db()

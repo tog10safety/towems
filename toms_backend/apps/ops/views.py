@@ -7562,13 +7562,30 @@ class AirfieldViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 def _exclude_categories(queryset, raw: str):
-    """Drop comma-separated categories from an inbox query.
-
-    The bell asks for ``exclude_category=message``: private messages have their
-    own counter and their own page, so they never sit among system notices.
-    """
+    """Drop comma-separated categories from an inbox query."""
     names = [name.strip() for name in (raw or "").split(",") if name.strip()]
     return queryset.exclude(category__in=names) if names else queryset
+
+
+def _include_message_notices(request) -> bool:
+    """True only when a caller explicitly opts back into message notices.
+
+    The inbox is the system's: private messages have their own page and their
+    own unread counter, so they are hidden by default and a screen that really
+    needs them must say ``include_messages=true``.
+    """
+    raw = (request.query_params.get("include_messages") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _inbox_notifications(request):
+    """The system inbox query for one account, messages excluded by default."""
+    queryset = Notification.objects.filter(recipient_id=request.user.id)
+    if not _include_message_notices(request):
+        queryset = queryset.exclude(category="message")
+    return _exclude_categories(
+        queryset, request.query_params.get("exclude_category")
+    )
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
@@ -7603,9 +7620,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     }
 
     def get_queryset(self):
-        queryset = Notification.objects.select_related("created_by").filter(
-            recipient_id=self.request.user.id
-        )
+        queryset = _inbox_notifications(self.request).select_related("created_by")
         scope = self.request.query_params.get("scope")
         if scope == "action":
             queryset = queryset.filter(
@@ -7619,16 +7634,12 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             )
         elif scope == "unread":
             queryset = queryset.filter(is_read=False)
-        return _exclude_categories(
-            queryset, self.request.query_params.get("exclude_category")
-        )
+        return queryset
 
     @action(detail=False, methods=["get"])
     def summary(self, request):
-        base = _exclude_categories(
-            Notification.objects.filter(recipient_id=request.user.id),
-            request.query_params.get("exclude_category"),
-        )
+        # Same rule as the list: message notices are not system inbox rows.
+        base = _inbox_notifications(request)
         return Response(
             {
                 "unread": base.filter(is_read=False).count(),
