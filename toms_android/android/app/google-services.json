@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "551355625206",
+    "project_id": "towems",
+    "storage_bucket": "towems.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:551355625206:android:390f03dfead383db4bc6d7",
+        "android_client_info": {
+          "package_name": "online.mrmsystem.towems"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDC53XcqNtZDbGy6wNJG8fWA6GKET9T5Co"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
