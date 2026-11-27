@@ -30,12 +30,19 @@ from apps.accounts import (
     setup_gate,
     unit_changes,
 )
-from apps.accounts.models import AUTHORITY_CHOICES, CATEGORY_CHOICES, UnitChangeRequest, User
-from apps.accounts.models import PasswordResetToken
+from apps.accounts.models import (
+    AUTHORITY_CHOICES,
+    CATEGORY_CHOICES,
+    DeviceToken,
+    PasswordResetToken,
+    UnitChangeRequest,
+    User,
+)
 from apps.accounts.serializers import (
     AdminUserSerializer,
     AdminUserUpdateSerializer,
     ChangePasswordSerializer,
+    DevicePushTokenRequestSerializer,
     DeviceTokenRequestSerializer,
     LoginSerializer,
     MFACodeSerializer,
@@ -531,6 +538,42 @@ class DeviceTokenView(APIView):
             {"token": raw, "expires_at": row.expires_at, "label": row.label},
             status=status.HTTP_201_CREATED,
         )
+
+
+class DevicePushTokenView(APIView):
+    """Store (or clear) the FCM registration token of this install.
+
+    Reached with the watcher's own device token, so the phone can rotate its
+    Firebase token without a browser session; a live session is accepted too,
+    for a first registration made before the alert token exists. The row is
+    found from the credential, never from a client-supplied user id, so one
+    account cannot register a phone against another account.
+    """
+
+    authentication_classes = device_tokens.ALERT_AUTHENTICATION
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = DevicePushTokenRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        row = request.auth if isinstance(request.auth, DeviceToken) else None
+        if row is None:
+            device_id = data.get("device_id") or ""
+            row = DeviceToken.objects.filter(
+                user=request.user,
+                device_id=device_id,
+                revoked_at__isnull=True,
+            ).first()
+        if row is None or row.user_id != request.user.id:
+            raise ValidationError(
+                {"device_id": "Issue this install's alert token first."}
+            )
+
+        fcm_token = (data.get("fcm_token") or "").strip()
+        DeviceToken.objects.filter(pk=row.pk).update(fcm_token=fcm_token)
+        return Response({"registered": bool(fcm_token)})
 
 
 class DeviceTrackingView(APIView):

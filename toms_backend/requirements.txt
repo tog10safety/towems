@@ -16,6 +16,8 @@ qrcode==7.4.2
 pyotp==2.9.0
 # Closed-tab browser push for private messages (VAPID + Web Push).
 pywebpush==2.5.0
+# Phone push: signs the FCM HTTP v1 request with a service-account key.
+google-auth==2.35.0
 # Personnel registration template and .xlsx bulk import.
 openpyxl==3.1.5
 

@@ -8,6 +8,10 @@ deploy/systemd/backup.env
 # Legacy Flask settings contain a local credential fallback and are not source
 # for the Django application. Keep them out of version control.
 config.py
+# Firebase service-account keys for phone push (client-side google-services.json
+# is not secret and stays with the Android project).
+fcm-service-account*.json
+secrets/
 
 # ---------------------------------------------------------------------------
 # Python

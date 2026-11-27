@@ -66,6 +66,18 @@ public class AlertService extends Service {
     /** The session the stored token was minted from. */
     static final String TOKEN_SESSION_KEY = "token_session";
     private static final String DEVICE_ID_KEY = "device_id";
+    /** The FCM registration token now held by this install and the one the
+     *  server acknowledged. Push works when the two match. */
+    private static final String FCM_TOKEN_KEY = "fcm_token";
+    private static final String FCM_REGISTERED_KEY = "fcm_registered";
+    /** The device token the FCM token was registered with, so a renewed alert
+     *  token registers the phone again instead of being mistaken for done. */
+    private static final String FCM_REGISTERED_FOR_KEY = "fcm_registered_for";
+    /** Ids of banners posted from a push, cleared when everything is read. */
+    private static final String PUSH_IDS_KEY = "push_ids";
+    /** Registration is retried at most this often while it keeps failing. */
+    private static final String PUSH_ATTEMPT_KEY = "push_register_attempt";
+    private static final long PUSH_RETRY_MS = 600_000L;
 
     /** What the last round trip did, written for the strip to read. */
     static final String KEY_LAST_CHECK = "last_check_ms";
@@ -168,6 +180,9 @@ public class AlertService extends Service {
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         ensureChannels(this);
         startWatching();
+        // A phone that was signed in before the push build existed registers on
+        // its first launch without waiting for a new session.
+        registerPushToken(this, false);
         running = true;
         publish();
         handler.post(tick);
@@ -204,7 +219,7 @@ public class AlertService extends Service {
     }
 
     /** Channels exist for as long as the install does; the test path needs them too. */
-    private static void ensureChannels(Context context) {
+    static void ensureChannels(Context context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return;
         }
@@ -531,6 +546,9 @@ public class AlertService extends Service {
             for (Long id : seen) {
                 cancel(alertNotificationId(id));
             }
+            // Push banners live outside ``seen``; without this the icon would
+            // stay lit after reading a message that arrived by FCM.
+            cancelPostPushes();
             return;
         }
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ALERTS)
@@ -639,6 +657,9 @@ public class AlertService extends Service {
                     .putString(TOKEN_SESSION_KEY, session)
                     .apply();
             Log.i(TAG, "alert token renewed for this phone");
+            // Now that this install has a credential, register for push; the
+            // first registration otherwise waits for the next launch.
+            registerPushToken(this, true);
             return token;
         } catch (Exception error) {
             Log.w(TAG, "token exchange failed", error);
@@ -827,6 +848,191 @@ public class AlertService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             manager.cancel(id);
+        }
+    }
+
+    /** Drop the banners a push posted, now that the account has read everything. */
+    private void cancelPostPushes() {
+        SharedPreferences stored = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        Set<String> posted = stored.getStringSet(PUSH_IDS_KEY, null);
+        if (posted == null || posted.isEmpty()) {
+            return;
+        }
+        for (String value : new HashSet<>(posted)) {
+            try {
+                cancel(Integer.parseInt(value));
+            } catch (NumberFormatException ignored) {
+                // A stale entry is harmless; it is dropped with the set below.
+            }
+        }
+        stored.edit().remove(PUSH_IDS_KEY).apply();
+    }
+
+    // ------------------------------------------------------------- push
+
+    /** Called by {@link TowemsMessagingService} when FCM issues a new token. */
+    static void rememberPushToken(Context context, String token) {
+        context.getApplicationContext()
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(FCM_TOKEN_KEY, token)
+                .apply();
+    }
+
+    /**
+     * Give the server this install's FCM token, so it can wake the phone.
+     *
+     * Registration rides on the watcher's own device token, so it needs no
+     * browser session and ends with the same sign-out. It is skipped entirely on
+     * a build made without google-services.json: `FirebaseApp` then has no
+     * options, and the poll still covers the phone.
+     *
+     * ``force`` is used for the moment a token is minted or FCM rotates one; the
+     * usual call is throttled so a failing server is not hammered every tick.
+     */
+    static void registerPushToken(Context context, boolean force) {
+        final Context app = context.getApplicationContext();
+        final SharedPreferences prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        final String deviceToken = prefs.getString(TOKEN_KEY, null);
+        if (deviceToken == null || deviceToken.isEmpty()) {
+            return;
+        }
+        long last = prefs.getLong(PUSH_ATTEMPT_KEY, 0);
+        if (!force && System.currentTimeMillis() - last < PUSH_RETRY_MS) {
+            return;
+        }
+        try {
+            if (com.google.firebase.FirebaseApp.getApps(app).isEmpty()) {
+                // No google-services.json in this build; nothing to register.
+                return;
+            }
+        } catch (Throwable unlinked) {
+            Log.i(TAG, "Firebase is not linked into this build");
+            return;
+        }
+        prefs.edit().putLong(PUSH_ATTEMPT_KEY, System.currentTimeMillis()).apply();
+
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken()
+                    .addOnCompleteListener(task -> {
+                        if (!task.isSuccessful() || task.getResult() == null) {
+                            Log.i(TAG, "FCM has not issued a token yet");
+                            return;
+                        }
+                        String fcm = task.getResult();
+                        if (fcm.isEmpty()) {
+                            return;
+                        }
+                        prefs.edit().putString(FCM_TOKEN_KEY, fcm).apply();
+                        if (fcm.equals(prefs.getString(FCM_REGISTERED_KEY, null))
+                                && deviceToken.equals(
+                                        prefs.getString(FCM_REGISTERED_FOR_KEY, null))) {
+                            return;
+                        }
+                        new Thread(() -> postPushToken(app, deviceToken, fcm),
+                                "towems-push-register").start();
+                    });
+        } catch (RuntimeException noFirebase) {
+            Log.i(TAG, "FCM unavailable: " + noFirebase.getClass().getSimpleName());
+        }
+    }
+
+    /** POST the FCM token to the server, authenticated by this install's token. */
+    private static void postPushToken(Context context, String deviceToken, String fcm) {
+        HttpURLConnection connection = null;
+        try {
+            JSONObject body = new JSONObject();
+            body.put("fcm_token", fcm);
+            byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
+
+            connection = (HttpURLConnection) new URL(BASE_URL + "/api/auth/devices/push/")
+                    .openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setConnectTimeout(15_000);
+            connection.setReadTimeout(20_000);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Authorization", "Device " + deviceToken);
+            connection.setRequestProperty("User-Agent", "TOWEMS-Android/1.0");
+            connection.setFixedLengthStreamingMode(payload.length);
+            try (OutputStream out = connection.getOutputStream()) {
+                out.write(payload);
+            }
+
+            int code = connection.getResponseCode();
+            if (code == 200 || code == 201) {
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(FCM_REGISTERED_KEY, fcm)
+                        .putString(FCM_REGISTERED_FOR_KEY, deviceToken)
+                        .apply();
+                Log.i(TAG, "push registered for this phone");
+            } else {
+                Log.i(TAG, "push registration answered " + code);
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "push registration failed", error);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    /**
+     * Draw a push as a notification on the same audible channel a polled alert
+     * uses, carrying the account's unread number for the launcher badge.
+     *
+     * Static because {@link TowemsMessagingService} may be started with no
+     * activity and no watcher: the notification must not depend on either.
+     */
+    static void showPushNotification(
+            Context context,
+            String title,
+            String text,
+            String path,
+            int count,
+            boolean message,
+            boolean urgent) {
+        ensureChannels(context);
+        if (!canPostNotifications(context)) {
+            Log.w(TAG, "push dropped: notifications are blocked");
+            return;
+        }
+        // One id per title/path: a second alert about the same thing replaces
+        // the first instead of stacking a duplicate.
+        int id = 20000 + Math.abs((title + "|" + (path == null ? "" : path)).hashCode() % 50000);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(
+                context, message ? CHANNEL_MESSAGES : CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_towems)
+                .setContentTitle(title.length() > 120 ? title.substring(0, 120) : title)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                .setNumber(Math.max(count, 0))
+                .setGroup(GROUP_ALERTS)
+                .setAutoCancel(true)
+                .setPriority(urgent ? NotificationCompat.PRIORITY_MAX : NotificationCompat.PRIORITY_HIGH)
+                .setCategory(message
+                        ? NotificationCompat.CATEGORY_MESSAGE
+                        : urgent ? NotificationCompat.CATEGORY_ALARM : NotificationCompat.CATEGORY_EVENT)
+                .setVibrate(VIBRATION)
+                .setContentIntent(openIntent(
+                        context, path == null || path.isEmpty() ? "/notifications" : path, id));
+        NotificationManager manager =
+                (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) {
+            return;
+        }
+        try {
+            manager.notify(id, builder.build());
+            SharedPreferences stored =
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            Set<String> posted = new HashSet<>(
+                    stored.getStringSet(PUSH_IDS_KEY, new HashSet<>()));
+            posted.add(String.valueOf(id));
+            stored.edit().putStringSet(PUSH_IDS_KEY, posted).apply();
+        } catch (RuntimeException refused) {
+            Log.w(TAG, "push notification refused", refused);
         }
     }
 }

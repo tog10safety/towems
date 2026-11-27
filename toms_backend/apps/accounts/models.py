@@ -560,6 +560,11 @@ class DeviceToken(models.Model):
     #: The session the token was minted from, so ending that session ends it.
     session_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
     token_hash = models.CharField(max_length=64, unique=True)
+    #: Firebase Cloud Messaging registration token for this install. The app
+    #: rotates it whenever FCM issues a new one; an empty value simply means
+    #: this phone is still reached by polling. It dies with the row, so signing
+    #: out stops push as well as polling.
+    fcm_token = models.CharField(max_length=512, blank=True, default="")
     label = models.CharField(max_length=80, blank=True, default="")
     user_agent = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)

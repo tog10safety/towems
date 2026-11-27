@@ -44,6 +44,13 @@ urlpatterns = [
         views.DeviceTokenView.as_view(),
         name="auth-device-token",
     ),
+    # The FCM registration token of this install: what lets the server wake the
+    # app with a notification instead of waiting for its next poll.
+    path(
+        "auth/devices/push/",
+        views.DevicePushTokenView.as_view(),
+        name="auth-device-push",
+    ),
     # The phone's foreground location service: which run to record, and the
     # breadcrumbs for it, without a browser session that dies after an hour.
     path(

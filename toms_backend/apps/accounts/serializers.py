@@ -872,6 +872,22 @@ class UnitChangeRequestSerializer(serializers.ModelSerializer):
         ]
 
 
+class DevicePushTokenRequestSerializer(serializers.Serializer):
+    """The FCM registration token of one install.
+
+    ``device_id`` is only needed when a browser session registers a token; the
+    phone itself authenticates with its device token, which already names the
+    install. An empty ``fcm_token`` unregisters the phone.
+    """
+
+    fcm_token = serializers.CharField(
+        max_length=512, required=False, allow_blank=True, default=""
+    )
+    device_id = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
+
+
 class DeviceTokenRequestSerializer(serializers.Serializer):
     """What the Android shell sends once, with its live session.
 

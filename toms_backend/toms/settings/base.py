@@ -390,4 +390,16 @@ MESSAGING_PUSH_ALLOWED_HOSTS = tuple(
     if host.strip()
 )
 
+# --- Phone push (Firebase Cloud Messaging) ----------------------------------
+# FCM is free for unlimited messages and is the one thing the watcher cannot do
+# for itself: Google keeps a connection to the phone and wakes the app, so
+# delivery does not depend on a foreground service that Android or an OEM
+# battery saver may end. Create a Firebase project, add the Android app
+# ``online.mrmsystem.towems``, keep the downloaded google-services.json in
+# toms_android/android/app/, and point FCM_CREDENTIALS_FILE at the
+# service-account JSON kept outside the repository. With either unset the
+# server does not push; the watcher still polls, exactly as before.
+FCM_PROJECT_ID = env("FCM_PROJECT_ID", "")
+FCM_CREDENTIALS_FILE = env("FCM_CREDENTIALS_FILE", "")
+
 # Environment modules (dev/staging/prod) validate their own requirements.

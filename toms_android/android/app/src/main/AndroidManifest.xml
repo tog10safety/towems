@@ -34,6 +34,18 @@
             android:exported="false"
             android:foregroundServiceType="dataSync|remoteMessaging" />
 
+        <!-- Push delivery while the app is closed. Google holds the connection
+             to the phone and starts this service when the account receives
+             something, so delivery no longer depends on the watcher surviving
+             Android's service limits or an OEM battery manager. -->
+        <service
+            android:name=".TowemsMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- The driver's position, recorded natively so a locked screen does not
              stop it. Started only while a run is open. -->
         <service
@@ -50,8 +62,14 @@
             </intent-filter>
         </receiver>
 
+        <!-- Only used if FCM ever delivers a notification payload rather than
+             the data payload TOWEMS sends; keeps it on the audible channel. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="towems_messages_v2" />
+
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name="androidx.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">

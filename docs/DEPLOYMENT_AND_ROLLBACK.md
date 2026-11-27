@@ -546,6 +546,67 @@ was live when it was created, so a new pair silently stops delivery to every exi
 people have to re-enable notifications. Rotate only if the private key leaks, and tell users to
 turn notifications off and on again afterwards.
 
+### 5.4 Phone push for the Android app (Firebase Cloud Messaging)
+
+The watcher's foreground service is a fallback, not a guarantee: Android 15 caps a long-running
+service and OEM battery managers end one anyway, which is why alerts used to arrive only when
+the app was opened. FCM is the transport WhatsApp and Viber use - Google holds one connection to
+the phone and wakes the app - and it is free for unlimited messages. No Google Cloud billing
+account is needed; the Firebase **Spark** plan is enough.
+
+With no Firebase configuration the server behaves exactly as before (the watcher polls) and the
+app builds and runs. Configure both halves to turn push on.
+
+**1. Create the Firebase project (once).** In <https://console.firebase.google.com> create a
+project, then *Add app -> Android* with package name `online.mrmsystem.towems` (the download is
+`google-services.json`). Keep it in `toms_android/android/app/google-services.json`. That file is
+not a secret - it ships inside every APK - but it belongs to this one Firebase project, so keep it
+out of a shared build machine's other projects.
+
+**2. Service account for the server.** *Project settings -> Service accounts -> Generate new
+private key*. Save the JSON on the droplet outside the repository:
+
+```bash
+install -m 600 -o www-data -g www-data /root/fcm-service-account.json \
+  /var/www/towems/fcm-service-account.json
+```
+
+**3. Environment.** Append these names (values are not secrets except the file itself) to
+`/var/www/towems/.env`, then restart:
+
+```
+FCM_PROJECT_ID=<the Firebase project id, e.g. towems-prod>
+FCM_CREDENTIALS_FILE=/var/www/towems/fcm-service-account.json
+```
+
+```bash
+sudo systemctl restart towems.service
+cut -d= -f1 /var/www/towems/.env | grep '^FCM_'   # names only
+```
+
+**4. Rebuild the APK** after `google-services.json` exists (section 4); the `google-services`
+Gradle plugin is applied only when that file is present, and the app registers its FCM token
+with the watcher's own device token - no new sign-in.
+
+**5. Verify.** Pick an account that has installed the new APK:
+
+```bash
+cd /var/www/towems/toms_backend && set -a && . /var/www/towems/.env && set +a
+/var/www/towems/venv/bin/python manage.py shell -c \
+  "from apps.accounts.models import DeviceToken; from apps.ops import push; \
+   row = DeviceToken.objects.exclude(fcm_token='').first(); \
+   print(push.configured(), row and row.user.username, push.send_to_user(row.user_id, title='TOWEMS push test', body='If this buzzes with the app closed, push works.', path='/notifications'))"
+```
+
+It must print `True <username> 1`. Then close the app (swipe it away) and have someone send a
+direct message: the phone must buzz with TOWEMS nowhere on screen.
+
+**What still limits delivery.** A phone with no Google Play services (some China-market ROMs)
+cannot receive FCM at all; the watcher remains its only transport. An app the user has
+*force-stopped* in Android settings receives nothing until it is opened again - that is Android's
+rule for every app, WhatsApp included. Push tokens are stored on the install's `DeviceToken` row,
+so signing out, changing the password or an expired alert token stops push with the same rows.
+
 ## 6. Cutover checklist
 
 1. [ ] Backup taken **and restore-tested**.
