@@ -303,6 +303,9 @@ export default function MessagesPage() {
       if (
         silent &&
         incoming.some((row) => !row.is_mine) &&
+        // The freshly fetched card carries the current mute flag; the effect's
+        // closure would otherwise keep the value from when the thread opened.
+        !data.conversation.is_muted &&
         notificationsSupported() &&
         Notification.permission === "granted" &&
         (document.hidden || !document.hasFocus())
