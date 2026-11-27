@@ -358,6 +358,31 @@ class ConversationReadView(MessagingBaseView):
         )
 
 
+class ConversationStateView(MessagingBaseView):
+    """Per-person inbox actions: pin, mute, archive, unread and delete.
+
+    These flags belong to one participant's view. They never change what the
+    other participants see, and a new message restores a deleted thread.
+    """
+
+    def post(self, request, pk):
+        enforce_csrf(request)
+        conversation = self.conversation(request, pk)
+        action = str(request.data.get("action") or "")
+        try:
+            services.set_conversation_state(conversation, request.user, action)
+        except services.MessagingError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(
+            {
+                "action": action,
+                "unread_total": services.inbox_unread_total(request.user),
+            }
+        )
+
+
 class TypingView(MessagingBaseView):
     """Tell the other participant that this one is composing."""
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import { api, qs } from "../api/client.js";
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -147,6 +148,19 @@ export default function MessagesPage() {
   const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
   const [notice, setNotice] = useState("");
+
+  // Long-press / right-click actions, archive filter and multi-select.
+  const [menuRow, setMenuRow] = useState(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [showArchived, setShowArchived] = useState(false);
+  const [stateBusy, setStateBusy] = useState(false);
+  const longPressTimer = useRef(null);
+  const longPressStart = useRef(null);
+  const suppressClick = useRef(false);
+  // The menu opens while the finger is still down; the release click must not
+  // land on the backdrop and close it again.
+  const menuOpenedAt = useRef(0);
 
   const [membersOpen, setMembersOpen] = useState(false);
   const [members, setMembers] = useState([]);
@@ -404,6 +418,137 @@ export default function MessagesPage() {
     const url = new URL(window.location.href);
     url.searchParams.delete("conversation");
     window.history.replaceState({}, "", url);
+  }
+
+  function cancelLongPress() {
+    window.clearTimeout(longPressTimer.current);
+    longPressStart.current = null;
+  }
+
+  function beginLongPress(row, event) {
+    // A mouse gets the ordinary context menu; touch and pen get a long press.
+    if (event.pointerType === "mouse") return;
+    cancelLongPress();
+    longPressStart.current = { x: event.clientX, y: event.clientY };
+    longPressTimer.current = window.setTimeout(() => {
+      suppressClick.current = true;
+      menuOpenedAt.current = Date.now();
+      setMenuRow(row);
+    }, 500);
+  }
+
+  function moveLongPress(event) {
+    if (!longPressStart.current) return;
+    if (
+      Math.abs(event.clientX - longPressStart.current.x) > 10 ||
+      Math.abs(event.clientY - longPressStart.current.y) > 10
+    ) {
+      cancelLongPress();
+    }
+  }
+
+  function endLongPress() {
+    cancelLongPress();
+    // The click that follows a long press must not also open the thread.
+    window.setTimeout(() => {
+      suppressClick.current = false;
+    }, 0);
+  }
+
+  function handleRowClick(row) {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
+    if (selecting) {
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        if (next.has(row.id)) next.delete(row.id);
+        else next.add(row.id);
+        return next;
+      });
+      return;
+    }
+    openConversation(row.id);
+  }
+
+  function startSelecting(row) {
+    setMenuRow(null);
+    setSelecting(true);
+    setSelectedIds(new Set([row.id]));
+  }
+
+  function cancelSelecting() {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  }
+
+  async function applyAction(row, action) {
+    setStateBusy(true);
+    try {
+      await api.post(`/messaging/conversations/${row.id}/state/`, { action });
+      setMenuRow(null);
+      if (
+        (action === "delete" || action === "mark_unread") &&
+        row.id === activeId
+      ) {
+        closeThread();
+      }
+      if (action === "delete") {
+        setSelectedIds((current) => {
+          const next = new Set(current);
+          next.delete(row.id);
+          return next;
+        });
+      }
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setNotice(err.message || "Unable to update the conversation.");
+    } finally {
+      setStateBusy(false);
+    }
+  }
+
+  function deleteConversation(row) {
+    if (
+      !window.confirm(
+        "Delete this conversation for you? It comes back if a new message arrives."
+      )
+    ) {
+      return;
+    }
+    applyAction(row, "delete");
+  }
+
+  async function bulkAction(action) {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    if (
+      action === "delete" &&
+      !window.confirm(`Delete ${ids.length} conversation(s) for you?`)
+    ) {
+      return;
+    }
+    setStateBusy(true);
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          api.post(`/messaging/conversations/${id}/state/`, { action })
+        )
+      );
+      if (action === "delete" && ids.includes(activeId)) closeThread();
+      cancelSelecting();
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setNotice(err.message || "Unable to update the conversations.");
+    } finally {
+      setStateBusy(false);
+    }
+  }
+
+  function toggleArchived() {
+    setShowArchived((current) => !current);
+    cancelSelecting();
   }
 
   async function startWith(person) {
@@ -677,6 +822,11 @@ export default function MessagesPage() {
     ...routingThreads,
     ...conversations,
   ];
+  const inboxRows = visibleRows.filter((row) => !row.is_archived);
+  const archivedRows = visibleRows.filter((row) => row.is_archived);
+  const listedRows = [...(showArchived ? archivedRows : inboxRows)].sort(
+    (a, b) => Number(Boolean(b.is_pinned)) - Number(Boolean(a.is_pinned))
+  );
   const activeConversation =
     visibleRows.find((row) => row.id === activeId) || thread;
   const isUnitGroup = activeConversation?.kind === "unit_group";
@@ -702,6 +852,15 @@ export default function MessagesPage() {
             <p className="messaging-sub">
               {privateEnabled ? "Unit chat and private messages" : "Unit chat"}
               {unreadTotal ? ` · ${unreadTotal} unread` : ""}
+              {(archivedRows.length > 0 || showArchived) && (
+                <button
+                  type="button"
+                  className="msg-link messaging-archive-link"
+                  onClick={toggleArchived}
+                >
+                  {showArchived ? "Inbox" : `Archived (${archivedRows.length})`}
+                </button>
+              )}
             </p>
           </div>
           <div className="messaging-head-actions">
@@ -738,6 +897,41 @@ export default function MessagesPage() {
             <Icon name="eye" size={15} />
           </Button>
         </form>
+
+        {selecting && (
+          <div className="messaging-select-bar">
+            <strong>{selectedIds.size} selected</strong>
+            <div className="btn-row">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={stateBusy}
+                onClick={() => bulkAction(showArchived ? "unarchive" : "archive")}
+              >
+                {showArchived ? "Unarchive" : "Archive"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={stateBusy}
+                onClick={() => bulkAction("mute")}
+              >
+                Mute
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={stateBusy}
+                onClick={() => bulkAction("delete")}
+              >
+                Delete
+              </Button>
+              <Button size="sm" variant="ghost" onClick={cancelSelecting}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
 
         {notice && (
           <p className="messaging-note" role="status">
@@ -832,17 +1026,38 @@ export default function MessagesPage() {
           </div>
         ) : listLoading && !visibleRows.length ? (
           <Loading label="Loading conversations…" />
-        ) : visibleRows.length ? (
+        ) : listedRows.length ? (
           <ul className="conversation-list">
-            {visibleRows.map((row) => {
+            {listedRows.map((row) => {
               const groupRow = row.kind !== "private";
+              const selected = selectedIds.has(row.id);
               return (
                 <li key={row.id}>
                   <button
                     type="button"
-                    className={`conversation-item ${row.id === activeId ? "active" : ""}`}
-                    onClick={() => openConversation(row.id)}
+                    className={`conversation-item ${row.id === activeId ? "active" : ""}${
+                      selected ? " is-selected" : ""
+                    }`}
+                    onClick={() => handleRowClick(row)}
+                    onPointerDown={(event) => beginLongPress(row, event)}
+                    onPointerMove={moveLongPress}
+                    onPointerUp={endLongPress}
+                    onPointerCancel={endLongPress}
+                    onPointerLeave={endLongPress}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setMenuRow(row);
+                    }}
+                    aria-pressed={selecting ? selected : undefined}
                   >
+                    {selecting && (
+                      <span
+                        className={`conv-select ${selected ? "is-on" : ""}`}
+                        aria-hidden="true"
+                      >
+                        {selected ? <Icon name="check" size={12} /> : null}
+                      </span>
+                    )}
                     <span
                       className={`msg-avatar ${groupRow ? "msg-avatar-group" : ""}`}
                       aria-hidden="true"
@@ -883,6 +1098,16 @@ export default function MessagesPage() {
                       </span>
                     </span>
                     <span className="conversation-flags">
+                      {row.is_pinned && (
+                        <span className="conv-flag" title="Pinned" aria-label="Pinned">
+                          <Icon name="pin" size={13} />
+                        </span>
+                      )}
+                      {row.is_muted && (
+                        <span className="conv-flag" title="Muted" aria-label="Muted">
+                          <Icon name="mute" size={13} />
+                        </span>
+                      )}
                       {!groupRow && (
                         <span
                           className={`msg-presence ${row.peer.online ? "is-online" : ""}`}
@@ -903,9 +1128,11 @@ export default function MessagesPage() {
         ) : (
           <EmptyState
             message={
-              privateEnabled
-                ? "No conversations yet. Choose New to start one."
-                : "No unit chat is available for your account."
+              showArchived
+                ? "No archived conversations."
+                : privateEnabled
+                  ? "No conversations yet. Choose New to start one."
+                  : "No unit chat is available for your account."
             }
           />
         )}
@@ -1385,6 +1612,106 @@ export default function MessagesPage() {
           </div>
         )}
       </section>
+
+      {menuRow &&
+        createPortal(
+          <div
+            className="conv-menu-backdrop"
+            role="presentation"
+            onClick={() => {
+              if (Date.now() - menuOpenedAt.current < 400) return;
+              setMenuRow(null);
+            }}
+          >
+            <div
+              className="conv-menu"
+              role="menu"
+              aria-label={`Actions for ${conversationTitle(menuRow)}`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="conv-menu-head">
+                <strong>{conversationTitle(menuRow)}</strong>
+                <span className="hint">Only your view changes.</span>
+              </header>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={stateBusy}
+                onClick={() =>
+                  applyAction(
+                    menuRow,
+                    menuRow.unread_count > 0 ? "mark_read" : "mark_unread"
+                  )
+                }
+              >
+                {menuRow.unread_count > 0 ? "Mark as read" : "Mark as unread"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={stateBusy}
+                onClick={() =>
+                  applyAction(menuRow, menuRow.is_pinned ? "unpin" : "pin")
+                }
+              >
+                {menuRow.is_pinned ? "Unpin" : "Pin"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={stateBusy}
+                onClick={() =>
+                  applyAction(menuRow, menuRow.is_muted ? "unmute" : "mute")
+                }
+              >
+                {menuRow.is_muted ? "Unmute" : "Mute"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => startSelecting(menuRow)}
+              >
+                Select
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={stateBusy}
+                onClick={() =>
+                  applyAction(
+                    menuRow,
+                    menuRow.is_archived ? "unarchive" : "archive"
+                  )
+                }
+              >
+                {menuRow.is_archived ? "Unarchive" : "Archive"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                onClick={() => deleteConversation(menuRow)}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setMenuRow(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
+}
+
+function conversationTitle(row) {
+  if (!row) return "";
+  return row.kind === "private"
+    ? row.peer?.full_name || "Conversation"
+    : row.title || "Group chat";
 }

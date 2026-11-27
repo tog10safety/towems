@@ -176,6 +176,14 @@ class ConversationMember(models.Model):
     #: (both allowed); the Operations Center creates the row when it restricts.
     can_view = models.BooleanField(default=True)
     can_post = models.BooleanField(default=True)
+    #: Per-person inbox preferences. They never affect the other participants.
+    is_pinned = models.BooleanField(default=False)
+    is_muted = models.BooleanField(default=False)
+    is_archived = models.BooleanField(default=False)
+    #: "Mark as unread" even when the newest message is the viewer's own.
+    marked_unread = models.BooleanField(default=False)
+    #: Delete for me: hide the thread until a new message arrives.
+    deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timeutils.now)
 
     class Meta:

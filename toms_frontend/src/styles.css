@@ -9215,6 +9215,112 @@ span.flight-fuel-value {
   border-color: var(--border);
 }
 
+.conversation-item.is-selected {
+  background: var(--bg-subtle);
+  border-color: var(--primary);
+}
+
+.conv-select {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  color: #fff;
+}
+
+.conv-select.is-on {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.conv-flag {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.messaging-archive-link {
+  margin-left: 8px;
+}
+
+.messaging-select-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.messaging-select-bar .btn-row {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.conv-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.conv-menu {
+  width: min(330px, 100%);
+  max-height: min(80vh, 620px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.conv-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.conv-menu button {
+  display: block;
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conv-menu button:last-child {
+  border-bottom: 0;
+}
+
+.conv-menu button:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+
+.conv-menu button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.conv-menu button.danger {
+  color: var(--danger);
+}
+
 .conversation-text {
   display: flex;
   flex-direction: column;

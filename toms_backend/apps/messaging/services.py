@@ -333,9 +333,9 @@ def custom_groups_for(user):
         unit_id=user.unit_id,
         is_enabled=True,
     ).select_related("unit")
-    return queryset.filter(members__user_id=user.id).distinct().order_by(
-        "-last_message_at", "-id"
-    )
+    return queryset.filter(
+        members__user_id=user.id, members__deleted_at__isnull=True
+    ).distinct().order_by("-last_message_at", "-id")
 
 
 def routing_threads_for(user):
@@ -349,6 +349,7 @@ def routing_threads_for(user):
         Conversation.objects.filter(
             kind=Conversation.KIND_GROUP_REQUEST,
             members__user_id=user.id,
+            members__deleted_at__isnull=True,
         )
         .select_related("unit", "group_chat_request_thread")
         .distinct()
@@ -362,12 +363,13 @@ def routing_thread_unread_total(user) -> int:
     )
     total = 0
     for member in rows:
-        total += (
+        count = (
             Message.objects.filter(conversation_id=member.conversation_id)
             .exclude(sender_id=user.id)
             .filter(id__gt=member.last_read_message_id)
             .count()
         )
+        total += _member_unread(member, count)
     return total
 
 
@@ -381,11 +383,12 @@ def custom_group_unread(conversation, user_id) -> int:
     ).first()
     if member is None:
         return 0
-    return (
+    count = (
         conversation.messages.exclude(sender_id=user_id)
         .filter(id__gt=member.last_read_message_id)
         .count()
     )
+    return _member_unread(member, count)
 
 
 def custom_group_unread_total(user) -> int:
@@ -399,12 +402,13 @@ def custom_group_unread_total(user) -> int:
     )
     total = 0
     for member in rows:
-        total += (
+        count = (
             Message.objects.filter(conversation_id=member.conversation_id)
             .exclude(sender_id=user.id)
             .filter(id__gt=member.last_read_message_id)
             .count()
         )
+        total += _member_unread(member, count)
     return total
 
 
@@ -596,16 +600,39 @@ def peer_of(conversation, user):
     )
 
 
+def is_muted(conversation, user_id) -> bool:
+    """True when this person has muted the thread's alerts."""
+    return ConversationMember.objects.filter(
+        conversation=conversation, user_id=user_id, is_muted=True
+    ).exists()
+
+
+def _member_unread(member, count: int) -> int:
+    """Apply the per-person state to a raw unread count.
+
+    A deleted thread is out of the inbox, and a manual "mark unread" keeps a
+    thread flagged even when its newest message is the viewer's own.
+    """
+    if member is None:
+        return count
+    if member.deleted_at is not None:
+        return 0
+    if member.marked_unread:
+        return max(count, 1)
+    return count
+
+
 def unread_count(conversation, user_id) -> int:
     member = ConversationMember.objects.filter(
         conversation=conversation, user_id=user_id
     ).first()
     cursor = member.last_read_message_id if member else 0
-    return (
+    count = (
         conversation.messages.exclude(sender_id=user_id)
         .filter(id__gt=cursor)
         .count()
     )
+    return _member_unread(member, count)
 
 
 def unread_total(user_id) -> int:
@@ -618,12 +645,13 @@ def unread_total(user_id) -> int:
     for member in rows:
         if member.conversation.is_group():
             continue
-        total += (
+        count = (
             Message.objects.filter(conversation_id=member.conversation_id)
             .exclude(sender_id=user_id)
             .filter(id__gt=member.last_read_message_id)
             .count()
         )
+        total += _member_unread(member, count)
     return total
 
 
@@ -754,6 +782,12 @@ def _notify_mentions(conversation, sender, mentioned) -> None:
     """Tell each named person once, without repeating what was written."""
     from apps.ops.notifications import notify_many
 
+    # A muted thread stays silent even when the sender names the person.
+    mentioned = [
+        person for person in mentioned if not is_muted(conversation, person.id)
+    ]
+    if not mentioned:
+        return
     title = f"{_display_name(sender)} mentioned you"
     if conversation.is_custom_group():
         subject = conversation.name or "a group chat"
@@ -817,6 +851,8 @@ def _notify_group_members(conversation, sender, mentioned=()) -> None:
     # an approved group's from its selected members.
     for person in conversation_people(conversation, sender):
         if person.id in skip:
+            continue
+        if is_muted(conversation, person.id):
             continue
         if _notify_recipient(conversation, sender, person) is None:
             _push_phone_message(conversation, sender, person)
@@ -907,6 +943,12 @@ def send_message(
     conversation.last_message_at = message.created_at
     conversation.save(update_fields=["last_message_at", "updated_at"])
 
+    # A new message brings a thread the person deleted for themselves back
+    # into the inbox; deletion is about their view, not the other participants'.
+    ConversationMember.objects.filter(
+        conversation=conversation, deleted_at__isnull=False
+    ).update(deleted_at=None)
+
     sender_member = member_for(conversation, sender)
     if message.id > sender_member.last_read_message_id:
         sender_member.last_read_message_id = message.id
@@ -921,9 +963,10 @@ def send_message(
     # mentions only.
     recipient = None if conversation.is_group() else peer_of(conversation, sender)
     if recipient is not None:
-        if _notify_recipient(conversation, sender, recipient) is None:
-            _push_phone_message(conversation, sender, recipient)
-        _queue_closed_tab_push(conversation, sender, recipient, message)
+        if not is_muted(conversation, recipient.id):
+            if _notify_recipient(conversation, sender, recipient) is None:
+                _push_phone_message(conversation, sender, recipient)
+            _queue_closed_tab_push(conversation, sender, recipient, message)
     elif not conversation.is_group_request():
         _notify_group_members(conversation, sender, mentioned)
         if mentioned:
@@ -1009,6 +1052,82 @@ def mark_delivered(conversation, viewer, up_to_id=None) -> int:
     return updated
 
 
+def mark_unread(conversation, viewer) -> ConversationMember:
+    """Flag a thread unread, even when its newest message is the viewer's own."""
+    member = member_for(conversation, viewer)
+    latest = (
+        conversation.messages.order_by("-id").values_list("id", flat=True).first()
+        or 0
+    )
+    member.last_read_message_id = max(0, latest - 1)
+    member.marked_unread = True
+    member.deleted_at = None
+    member.save(
+        update_fields=["last_read_message_id", "marked_unread", "deleted_at"]
+    )
+    return member
+
+
+def set_conversation_state(
+    conversation, viewer, action: str
+) -> ConversationMember:
+    """Apply one per-person inbox action from the conversation menu."""
+    action = (action or "").strip().lower()
+    if action == "mark_read":
+        mark_read(conversation, viewer)
+        return member_for(conversation, viewer)
+    if action == "mark_unread":
+        return mark_unread(conversation, viewer)
+    if action not in {
+        "pin",
+        "unpin",
+        "mute",
+        "unmute",
+        "archive",
+        "unarchive",
+        "delete",
+    }:
+        raise MessagingError("Unknown conversation action.")
+
+    member = member_for(conversation, viewer)
+    fields: list[str] = []
+    if action in {"pin", "unpin"}:
+        member.is_pinned = action == "pin"
+        fields.append("is_pinned")
+    elif action in {"mute", "unmute"}:
+        member.is_muted = action == "mute"
+        fields.append("is_muted")
+    elif action in {"archive", "unarchive"}:
+        member.is_archived = action == "archive"
+        fields.append("is_archived")
+    elif action == "delete":
+        member.deleted_at = timeutils.now()
+        member.is_pinned = False
+        member.is_archived = False
+        member.marked_unread = False
+        # Delete for me clears the thread's history from this person's view:
+        # only messages that arrive afterwards should count as unread when it
+        # returns to the inbox.
+        latest = (
+            conversation.messages.order_by("-id")
+            .values_list("id", flat=True)
+            .first()
+            or 0
+        )
+        member.last_read_message_id = max(
+            member.last_read_message_id, latest
+        )
+        fields = [
+            "deleted_at",
+            "is_pinned",
+            "is_archived",
+            "marked_unread",
+            "last_read_message_id",
+        ]
+    member.save(update_fields=fields)
+    return member
+
+
 def mark_read(conversation, viewer, up_to_id=None) -> int:
     """Move the viewer's read cursor forward and stamp the messages it covers."""
     from apps.ops.models import Notification
@@ -1023,6 +1142,15 @@ def mark_read(conversation, viewer, up_to_id=None) -> int:
     except (TypeError, ValueError):
         up_to = latest
     if up_to <= 0:
+        fields = []
+        if member.marked_unread:
+            member.marked_unread = False
+            fields.append("marked_unread")
+        if member.deleted_at is not None:
+            member.deleted_at = None
+            fields.append("deleted_at")
+        if fields:
+            member.save(update_fields=fields)
         return 0
 
     updated = 0
@@ -1035,10 +1163,21 @@ def mark_read(conversation, viewer, up_to_id=None) -> int:
             .filter(id__lte=up_to, read_at__isnull=True)
             .update(read_at=now)
         )
+    fields = []
     if up_to > member.last_read_message_id:
         member.last_read_message_id = up_to
         member.last_read_at = now
-        member.save(update_fields=["last_read_message_id", "last_read_at"])
+        fields += ["last_read_message_id", "last_read_at"]
+    # Reading clears a manual unread mark, and opening a thread the person had
+    # deleted for themselves restores it.
+    if member.marked_unread:
+        member.marked_unread = False
+        fields.append("marked_unread")
+    if member.deleted_at is not None:
+        member.deleted_at = None
+        fields.append("deleted_at")
+    if fields:
+        member.save(update_fields=fields)
 
     # The bell's notice for this thread has now been acted on - for a group as
     # much as for a private chat, or an unread notice would keep the phone's
@@ -1119,11 +1258,17 @@ def conversations_for(user):
         conversation_id=OuterRef("pk"),
         updated_at__gte=timeutils.now() - timedelta(seconds=typing_seconds()),
     ).exclude(user_id=user.id)
+    deleted = Member.objects.filter(
+        conversation_id=OuterRef("pk"),
+        user_id=user.id,
+        deleted_at__isnull=False,
+    )
 
     return (
         Conversation.objects.filter(
             Q(low_user_id=user.id) | Q(high_user_id=user.id)
         )
+        .filter(~Exists(deleted))
         .select_related(
             "low_user__profile",
             "low_user__unit",

@@ -277,6 +277,22 @@ def _last_message(conversation, viewer_id):
     }
 
 
+def _member_flags(member) -> dict:
+    """The viewer's own inbox state for one conversation."""
+    return {
+        "is_pinned": bool(member.is_pinned) if member else False,
+        "is_muted": bool(member.is_muted) if member else False,
+        "is_archived": bool(member.is_archived) if member else False,
+    }
+
+
+def _member_unread(member, count) -> int:
+    """A manual "mark unread" keeps a thread visible even with no new text."""
+    if member is not None and member.marked_unread:
+        return max(count, 1)
+    return count
+
+
 def conversation_payload(conversation, viewer) -> dict:
     peer = services.peer_of(conversation, viewer)
     unread = getattr(conversation, "unread_count", None)
@@ -293,9 +309,10 @@ def conversation_payload(conversation, viewer) -> dict:
         "kind": conversation.kind,
         "peer": person_payload(peer, viewer_id=viewer.id),
         "last_message": _last_message(conversation, viewer.id),
-        "unread_count": unread,
+        "unread_count": _member_unread(member, unread),
         "peer_typing": bool(typing),
         "last_read_message_id": member.last_read_message_id if member else 0,
+        **_member_flags(member),
         "created_at": _iso(conversation.created_at),
         "last_message_at": _iso(conversation.last_message_at),
     }
@@ -314,6 +331,9 @@ def unit_group_payload(conversation, viewer) -> dict | None:
     member = ConversationMember.objects.filter(
         conversation=conversation, user_id=viewer.id
     ).first()
+    # Delete for me: the unit channel is hidden until a new message arrives.
+    if member is not None and member.deleted_at is not None:
+        return None
     title = (
         f"{unit.acronym or unit.name} unit chat" if unit else "Unit chat"
     )
@@ -325,9 +345,12 @@ def unit_group_payload(conversation, viewer) -> dict | None:
         "unit_acronym": unit.acronym if unit else "",
         "peer": None,
         "last_message": _last_message(conversation, viewer.id),
-        "unread_count": services.unread_count(conversation, viewer.id),
+        "unread_count": _member_unread(
+            member, services.unread_count(conversation, viewer.id)
+        ),
         "peer_typing": False,
         "last_read_message_id": member.last_read_message_id if member else 0,
+        **_member_flags(member),
         "member_count": User.objects.filter(
             is_active=True, unit_id=conversation.unit_id
         ).count(),
@@ -348,6 +371,8 @@ def custom_group_payload(conversation, viewer) -> dict | None:
     member = ConversationMember.objects.filter(
         conversation=conversation, user_id=viewer.id
     ).first()
+    if member is not None and member.deleted_at is not None:
+        return None
     unit = conversation.unit
     return {
         "id": conversation.id,
@@ -357,9 +382,12 @@ def custom_group_payload(conversation, viewer) -> dict | None:
         "unit_acronym": unit.acronym if unit else "",
         "peer": None,
         "last_message": _last_message(conversation, viewer.id),
-        "unread_count": services.custom_group_unread(conversation, viewer.id),
+        "unread_count": _member_unread(
+            member, services.custom_group_unread(conversation, viewer.id)
+        ),
         "peer_typing": False,
         "last_read_message_id": member.last_read_message_id if member else 0,
+        **_member_flags(member),
         "member_count": conversation.members.count(),
         "can_post": can_post,
         "is_admin": False,
@@ -384,7 +412,7 @@ def routing_thread_payload(conversation, viewer) -> dict | None:
     member = ConversationMember.objects.filter(
         conversation=conversation, user_id=viewer.id
     ).first()
-    if member is None:
+    if member is None or member.deleted_at is not None:
         return None
     request_row = getattr(conversation, "group_chat_request_thread", None)
     unit = conversation.unit
@@ -401,9 +429,12 @@ def routing_thread_payload(conversation, viewer) -> dict | None:
         "unit_acronym": unit.acronym if unit else "",
         "peer": None,
         "last_message": _last_message(conversation, viewer.id),
-        "unread_count": services.unread_count(conversation, viewer.id),
+        "unread_count": _member_unread(
+            member, services.unread_count(conversation, viewer.id)
+        ),
         "peer_typing": False,
         "last_read_message_id": member.last_read_message_id,
+        **_member_flags(member),
         "member_count": conversation.members.count(),
         "can_post": False,
         "is_admin": False,

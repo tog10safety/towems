@@ -421,3 +421,133 @@ def test_every_message_pushes_the_phone_even_when_the_bell_has_a_notice(
     )
     # Never a copy of the conversation itself.
     assert all(row["body"] == "Open Messages to read it." for row in queued)
+
+
+def _state(client, conversation, action):
+    return client.post(
+        f"/api/messaging/conversations/{conversation}/state/",
+        {"action": action},
+        format="json",
+    )
+
+
+def test_pin_mute_and_archive_are_per_person(unit, as_user):
+    first = make_user(unit=unit)
+    second = make_user(unit=unit)
+    conversation = conversation_id(as_user, first, second)
+
+    client = as_user(first)
+    for action in ("pin", "mute", "archive"):
+        assert _state(client, conversation, action).status_code == 200, action
+
+    mine = client.get("/api/messaging/conversations/").json()["conversations"][0]
+    assert mine["is_pinned"] is True
+    assert mine["is_muted"] is True
+    assert mine["is_archived"] is True
+
+    theirs = (
+        as_user(second)
+        .get("/api/messaging/conversations/")
+        .json()["conversations"][0]
+    )
+    assert theirs["is_pinned"] is False
+    assert theirs["is_muted"] is False
+    assert theirs["is_archived"] is False
+
+    for action in ("unpin", "unmute", "unarchive"):
+        assert _state(client, conversation, action).status_code == 200, action
+    cleared = client.get("/api/messaging/conversations/").json()["conversations"][0]
+    assert cleared["is_pinned"] is False
+    assert cleared["is_muted"] is False
+    assert cleared["is_archived"] is False
+
+
+def test_mark_unread_keeps_a_thread_unread_even_with_no_new_text(unit, as_user):
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    conversation = conversation_id(as_user, sender, recipient)
+    recipient_client = as_user(recipient)
+
+    assert send(as_user(sender), conversation, "hello").status_code == 201
+    assert (
+        recipient_client.post(
+            f"/api/messaging/conversations/{conversation}/read/", {},
+            format="json",
+        ).status_code
+        == 200
+    )
+    assert (
+        recipient_client.get("/api/messaging/conversations/").json()["unread_total"]
+        == 0
+    )
+
+    assert _state(recipient_client, conversation, "mark_unread").status_code == 200
+    inbox = recipient_client.get("/api/messaging/conversations/").json()
+    assert inbox["unread_total"] == 1
+    assert inbox["conversations"][0]["unread_count"] == 1
+
+    # Opening and reading clears the flag.
+    assert (
+        recipient_client.post(
+            f"/api/messaging/conversations/{conversation}/read/", {},
+            format="json",
+        ).status_code
+        == 200
+    )
+    assert (
+        recipient_client.get("/api/messaging/conversations/").json()["unread_total"]
+        == 0
+    )
+
+
+def test_delete_hides_a_thread_until_the_next_message(unit, as_user):
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    conversation = conversation_id(as_user, sender, recipient)
+    sender_client = as_user(sender)
+    recipient_client = as_user(recipient)
+
+    assert send(sender_client, conversation, "first").status_code == 201
+    assert _state(recipient_client, conversation, "delete").status_code == 200
+    inbox = recipient_client.get("/api/messaging/conversations/").json()
+    assert inbox["conversations"] == []
+    assert inbox["unread_total"] == 0
+
+    # The other participant still has the conversation.
+    assert (
+        len(sender_client.get("/api/messaging/conversations/").json()["conversations"])
+        == 1
+    )
+
+    assert send(sender_client, conversation, "second").status_code == 201
+    inbox = recipient_client.get("/api/messaging/conversations/").json()
+    assert len(inbox["conversations"]) == 1
+    assert inbox["conversations"][0]["unread_count"] == 1
+
+
+def test_muting_stops_the_message_notification_until_unmuted(unit, as_user):
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    conversation = conversation_id(as_user, sender, recipient)
+    sender_client = as_user(sender)
+    recipient_client = as_user(recipient)
+
+    assert _state(recipient_client, conversation, "mute").status_code == 200
+    assert send(sender_client, conversation, "quiet").status_code == 201
+    assert not Notification.objects.filter(
+        recipient=recipient, category="message"
+    ).exists()
+
+    assert _state(recipient_client, conversation, "unmute").status_code == 200
+    assert send(sender_client, conversation, "loud").status_code == 201
+    assert Notification.objects.filter(
+        recipient=recipient, category="message"
+    ).exists()
+
+
+def test_an_unknown_state_action_is_refused(unit, as_user):
+    first = make_user(unit=unit)
+    second = make_user(unit=unit)
+    conversation = conversation_id(as_user, first, second)
+
+    assert _state(as_user(first), conversation, "explode").status_code == 400

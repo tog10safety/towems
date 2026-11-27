@@ -30,6 +30,11 @@ urlpatterns = [
         name="messaging-conversation-people",
     ),
     path(
+        "messaging/conversations/<int:pk>/state/",
+        views.ConversationStateView.as_view(),
+        name="messaging-conversation-state",
+    ),
+    path(
         "messaging/conversations/<int:pk>/read/",
         views.ConversationReadView.as_view(),
         name="messaging-read",
