@@ -143,11 +143,8 @@ def _iso(value):
 
 
 def _name(user) -> str:
-    return (
-        getattr(user, "full_name", "")
-        or getattr(user, "get_full_name", lambda: "")()
-        or getattr(user, "username", "")
-    )
+    """The short identity messaging displays: rank and surname only."""
+    return services.display_name(user)
 
 
 def conversation_member_payload(membership, viewer_id) -> dict:
@@ -158,6 +155,7 @@ def conversation_member_payload(membership, viewer_id) -> dict:
         "full_name": _name(user),
         "rank": user.rank or "",
         "serial_number": user.serial_number,
+        "avatar_url": services.avatar_url(user),
         "can_view": membership.can_view,
         "can_post": membership.can_post,
         "is_admin": False,
@@ -235,6 +233,7 @@ def message_payload(message: Message, viewer_id) -> dict:
             "serial_number": message.sender.serial_number,
             "rank": message.sender.rank or "",
             "full_name": _name(message.sender),
+            "avatar_url": services.avatar_url(message.sender),
         },
         # A unit channel has many readers; one member's fetch must not claim
         # that everyone received or read the message, so it carries no receipt.

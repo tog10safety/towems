@@ -43,7 +43,7 @@ def test_a_member_of_an_approved_group_sees_the_roster(unit, as_user):
     by_id = {row["id"]: row for row in rows}
     assert by_id[mate.id]["is_self"] is True
     assert by_id[owner.id]["is_self"] is False
-    assert by_id[owner.id]["full_name"] == owner.full_name
+    assert by_id[owner.id]["full_name"] == f"{owner.rank} {owner.last_name}"
 
 
 def test_an_inactive_member_is_left_out_of_the_roster(unit, as_user):

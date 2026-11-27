@@ -43,9 +43,31 @@ function initials(person) {
 }
 
 function personMeta(person) {
-  return [person?.rank, person?.unit_acronym || person?.unit_name]
-    .filter(Boolean)
-    .join(" · ");
+  // The title already carries rank and surname, so the meta line is the unit.
+  return [person?.unit_acronym || person?.unit_name].filter(Boolean).join(" · ");
+}
+
+/* A profile picture with the existing initials as its fallback. The avatar URL
+ * is empty when the person has not uploaded one, and an out-of-scope picture
+ * returns 404, so both cases degrade to the same placeholder. */
+function PersonAvatar({ person, className = "msg-avatar" }) {
+  const [broken, setBroken] = useState(false);
+  if (person?.avatar_url && !broken) {
+    return (
+      <img
+        className={`${className} avatar-photo`}
+        src={person.avatar_url}
+        alt=""
+        aria-hidden="true"
+        onError={() => setBroken(true)}
+      />
+    );
+  }
+  return (
+    <span className={className} aria-hidden="true">
+      {initials(person)}
+    </span>
+  );
 }
 
 function receiptLabel(message) {
@@ -969,13 +991,11 @@ export default function MessagesPage() {
                       className="msg-person"
                       onClick={() => startWith(person)}
                     >
-                      <span className="msg-avatar" aria-hidden="true">
-                        {initials(person)}
-                      </span>
+                      <PersonAvatar person={person} />
                       <span className="msg-person-text">
                         <span className="msg-person-name">{person.full_name}</span>
                         <span className="msg-person-meta">
-                          {[person.rank, person.serial_number, person.unit_acronym]
+                          {[person.serial_number, person.unit_acronym]
                             .filter(Boolean)
                             .join(" · ")}
                         </span>
@@ -1061,12 +1081,13 @@ export default function MessagesPage() {
                         {selected ? <Icon name="check" size={12} /> : null}
                       </span>
                     )}
-                    <span
-                      className={`msg-avatar ${groupRow ? "msg-avatar-group" : ""}`}
-                      aria-hidden="true"
-                    >
-                      {groupRow ? <Icon name="personnel" size={16} /> : initials(row.peer)}
-                    </span>
+                    {groupRow ? (
+                      <span className="msg-avatar msg-avatar-group" aria-hidden="true">
+                        <Icon name="personnel" size={16} />
+                      </span>
+                    ) : (
+                      <PersonAvatar person={row.peer} />
+                    )}
                     <span className="conversation-text">
                       <span className="conversation-top">
                         <span className="conversation-name">
@@ -1168,12 +1189,13 @@ export default function MessagesPage() {
               >
                 ←
               </button>
-              <span
-                className={`msg-avatar ${isGroup ? "msg-avatar-group" : ""}`}
-                aria-hidden="true"
-              >
-                {isGroup ? <Icon name="personnel" size={16} /> : initials(peer)}
-              </span>
+              {isGroup ? (
+                <span className="msg-avatar msg-avatar-group" aria-hidden="true">
+                  <Icon name="personnel" size={16} />
+                </span>
+              ) : (
+                <PersonAvatar person={peer} />
+              )}
               <div className="thread-title">
                 <strong>
                   {isGroup
@@ -1255,12 +1277,18 @@ export default function MessagesPage() {
                   <ul className="group-member-list">
                     {members.map((member) => (
                       <li className="group-member-row" key={member.id}>
-                        <span className="group-member-name">
-                          <strong>{member.full_name}</strong>
-                          <span className="hint">
-                            {[member.rank, member.serial_number].filter(Boolean).join(" · ")}
-                            {member.is_admin ? " · Group admin" : ""}
-                            {member.is_self ? " · You" : ""}
+                        <span className="group-member-ident">
+                          <PersonAvatar
+                            person={member}
+                            className="msg-avatar group-member-avatar"
+                          />
+                          <span className="group-member-name">
+                            <strong>{member.full_name}</strong>
+                            <span className="hint">
+                              {[member.serial_number].filter(Boolean).join(" · ")}
+                              {member.is_admin ? " · Group admin" : ""}
+                              {member.is_self ? " · You" : ""}
+                            </span>
                           </span>
                         </span>
                         {isUnitGroup && memberCanManage && (
@@ -1344,9 +1372,10 @@ export default function MessagesPage() {
                       )}
                       <div className={`bubble-row ${message.is_mine ? "mine" : "theirs"}`}>
                         {!message.is_mine && (
-                          <span className="bubble-avatar" aria-hidden="true">
-                            {initials(message.sender)}
-                          </span>
+                          <PersonAvatar
+                            person={message.sender}
+                            className="bubble-avatar"
+                          />
                         )}
                         <div className="bubble-stack">
                         <div className={`bubble ${message.is_unsent ? "is-unsent" : ""}`}>
@@ -1424,6 +1453,12 @@ export default function MessagesPage() {
                           )}
                         </div>
                         </div>
+                        {message.is_mine && (
+                          <PersonAvatar
+                            person={message.sender}
+                            className="bubble-avatar"
+                          />
+                        )}
                       </div>
                     </div>
                   );

@@ -9073,6 +9073,13 @@ span.flight-fuel-value {
   flex: none;
 }
 
+/* Uploaded pictures use the same round frame as the initials placeholder. */
+.msg-avatar.avatar-photo,
+.bubble-avatar.avatar-photo {
+  object-fit: cover;
+  object-position: center;
+}
+
 .msg-person-text {
   display: flex;
   flex-direction: column;
@@ -9757,6 +9764,23 @@ span.flight-fuel-value {
   gap: 14px;
   padding: 9px 2px;
   border-bottom: 1px solid var(--border);
+}
+
+.group-member-ident {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-member-ident .group-member-name {
+  flex: 1 1 auto;
+}
+
+.group-member-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 9px;
 }
 
 .group-member-name {

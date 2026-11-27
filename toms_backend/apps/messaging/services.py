@@ -463,9 +463,10 @@ def group_member_payload(
         ).first()
     return {
         "id": person.id,
-        "full_name": getattr(person, "full_name", "") or person.username,
+        "full_name": display_name(person),
         "rank": person.rank or "",
         "serial_number": person.serial_number,
+        "avatar_url": avatar_url(person),
         "can_view": can_view,
         "can_post": can_post,
         "is_admin": bool(is_admin),
@@ -693,9 +694,7 @@ def _notify_recipient(conversation, sender, recipient):
     ).exists()
     if existing:
         return None
-    sender_name = (
-        getattr(sender, "full_name", "") or getattr(sender, "username", "") or "TOWEMS"
-    )
+    sender_name = display_name(sender)
     return notify(
         recipient,
         title=f"New message from {sender_name}"[:200],
@@ -711,13 +710,28 @@ def _notify_recipient(conversation, sender, recipient):
     )
 
 
-def _display_name(user) -> str:
+def display_name(user) -> str:
+    """The name messaging shows: rank and surname only, e.g. ``COL SANTOS``.
+
+    The first and middle names stay on the personnel record; a chat header,
+    bubble and roster need the shortest form that still identifies the person.
+    """
+    rank = (getattr(user, "rank", "") or "").strip()
+    last = (getattr(user, "last_name", "") or "").strip()
+    short = " ".join(part for part in (rank, last) if part)
+    if short:
+        return short
     return (
         getattr(user, "full_name", "")
         or getattr(user, "get_full_name", lambda: "")()
         or getattr(user, "username", "")
         or "TOWEMS"
     )
+
+
+def _display_name(user) -> str:
+    """Backward-compatible alias used by notifications and group requests."""
+    return display_name(user)
 
 
 def conversation_people(conversation, viewer):
@@ -768,7 +782,7 @@ def conversation_roster(conversation):
         ConversationMember.objects.filter(
             conversation=conversation, user__is_active=True
         )
-        .select_related("user")
+        .select_related("user", "user__profile")
         .order_by(
             _rank_order("user__rank"),
             "user__last_name",
@@ -1298,6 +1312,7 @@ def messages_query(conversation):
     return (
         conversation.messages.select_related(
             "sender",
+            "sender__profile",
             "conversation",
             "reply_to",
             "reply_to__sender",

@@ -87,6 +87,38 @@ def test_sending_reaches_the_peer_with_an_unread_counter(unit, as_user):
     assert own["unread_total"] == 0
 
 
+def test_chat_names_use_rank_and_surname_and_show_the_avatar(unit, as_user):
+    sender = make_user(unit=unit, rank="COL", first_name="Juan", last_name="Santos")
+    recipient = make_user(unit=unit, rank="LTC", first_name="Maria", last_name="Cruz")
+    UserProfile.objects.create(
+        user=sender,
+        avatar_filename="avatar_sender.png",
+        avatar_content_type="image/png",
+    )
+    conversation = conversation_id(as_user, sender, recipient)
+    assert send(as_user(sender), conversation, "Hello").status_code == 201
+
+    received = as_user(recipient).get("/api/messaging/conversations/").json()
+    peer = received["conversations"][0]["peer"]
+    assert peer["full_name"] == "COL Santos"
+    assert peer["avatar_url"] == (
+        f"/api/personnel/{sender.id}/avatar/?v=avatar_sender.png"
+    )
+
+    sent = as_user(sender).get("/api/messaging/conversations/").json()
+    assert sent["conversations"][0]["peer"]["full_name"] == "LTC Cruz"
+
+    window = as_user(recipient).get(messages_url(conversation)).json()
+    sender_card = window["messages"][0]["sender"]
+    assert sender_card["full_name"] == "COL Santos"
+    assert sender_card["avatar_url"] == (
+        f"/api/personnel/{sender.id}/avatar/?v=avatar_sender.png"
+    )
+
+    notice = Notification.objects.get(recipient=recipient, category="message")
+    assert notice.title == "New message from COL Santos"
+
+
 def test_an_empty_or_oversized_message_is_refused(unit, as_user):
     sender = make_user(unit=unit)
     recipient = make_user(unit=unit)
