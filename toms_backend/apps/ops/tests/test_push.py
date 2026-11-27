@@ -176,6 +176,21 @@ def test_a_session_cannot_register_a_token_against_another_install(
     assert other.fcm_token == ""
 
 
+def test_a_push_token_belongs_to_one_account(creator, evaluator):
+    """The same phone signing in as somebody else must not keep both rows live."""
+    first = _device_token(APIClient(), creator, device_id="install-0001")
+    phone = APIClient()
+    phone.credentials(HTTP_AUTHORIZATION=f"Device {first}")
+    phone.post("/api/auth/devices/push/", {"fcm_token": "fcm-shared"}, format="json")
+
+    second = _device_token(APIClient(), evaluator, device_id="install-0001")
+    phone.credentials(HTTP_AUTHORIZATION=f"Device {second}")
+    phone.post("/api/auth/devices/push/", {"fcm_token": "fcm-shared"}, format="json")
+
+    assert DeviceToken.objects.get(user=creator).fcm_token == ""
+    assert DeviceToken.objects.get(user=evaluator).fcm_token == "fcm-shared"
+
+
 def test_an_alert_token_registers_only_its_own_row(creator, evaluator):
     """A token copied from another phone cannot attach a push token to it."""
     raw = _device_token(APIClient(), creator)

@@ -572,6 +572,14 @@ class DevicePushTokenView(APIView):
             )
 
         fcm_token = (data.get("fcm_token") or "").strip()
+        if fcm_token:
+            # One FCM token belongs to one signed-in install. A phone that signs
+            # in as somebody else keeps its row for the previous account, and
+            # that row must forget the token - otherwise the previous account's
+            # alerts would keep arriving on this person's phone.
+            DeviceToken.objects.filter(fcm_token=fcm_token).exclude(pk=row.pk).update(
+                fcm_token=""
+            )
         DeviceToken.objects.filter(pk=row.pk).update(fcm_token=fcm_token)
         return Response({"registered": bool(fcm_token)})
 
