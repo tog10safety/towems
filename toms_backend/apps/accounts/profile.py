@@ -711,8 +711,32 @@ def _serve_signature(user):
     return FileResponse(open(path, "rb"), content_type="image/png")
 
 
+def _shares_messaging_thread(viewer, target) -> bool:
+    """True when both people are visible members of the same Messages thread.
+
+    Messaging is deliberately cross-unit, so the conversation itself is the
+    authorisation for a face that the personnel directory would not expose.
+    This is only consulted by the avatar endpoint, never by a directory query.
+    """
+    if not viewer or not target or viewer.id == target.id:
+        return False
+    from apps.messaging.models import Conversation
+
+    return (
+        Conversation.objects.filter(
+            members__user_id=viewer.id,
+            members__can_view=True,
+        )
+        .filter(
+            members__user_id=target.id,
+            members__can_view=True,
+        )
+        .exists()
+    )
+
+
 class UserAvatarView(APIView):
-    """Stream another person's avatar to callers inside their unit scope."""
+    """Stream an avatar to unit scope or a person who shares a conversation."""
 
     permission_classes = [IsAuthenticated]
 
@@ -724,6 +748,8 @@ class UserAvatarView(APIView):
             raise Http404("Unknown person.")
         if user.id != request.user.id:
             allowed = accessible_unit_ids(request.user)
-            if user.unit_id not in allowed:
+            if user.unit_id not in allowed and not _shares_messaging_thread(
+                request.user, user
+            ):
                 raise Http404("Unknown person.")
         return _serve_avatar(user)

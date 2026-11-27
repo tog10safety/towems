@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from io import StringIO
 
 import pytest
+from django.conf import settings
 from django.core.management import call_command
 
 from apps.accounts.models import UserProfile
 from apps.core import timeutils
-from apps.core.factories import make_user
+from apps.core.factories import make_unit, make_user
 from apps.messaging.models import Conversation, Message, TypingState
 from apps.ops.models import AuditLog, Notification
 
@@ -117,6 +119,41 @@ def test_chat_names_use_rank_and_surname_and_show_the_avatar(unit, as_user):
 
     notice = Notification.objects.get(recipient=recipient, category="message")
     assert notice.title == "New message from COL Santos"
+
+
+def test_a_shared_conversation_exposes_a_cross_unit_avatar(unit, as_user):
+    other_unit = make_unit()
+    sender = make_user(unit=unit, rank="COL", first_name="Juan", last_name="Santos")
+    recipient = make_user(
+        unit=other_unit, rank="LTC", first_name="Maria", last_name="Cruz"
+    )
+    avatar_dir = settings.LEGACY_UPLOAD_DIR / "avatars"
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"avatar_cross_{uuid.uuid4().hex}.png"
+    avatar_bytes = b"\x89PNG\r\n\x1a\n"
+    (avatar_dir / filename).write_bytes(avatar_bytes)
+    UserProfile.objects.create(
+        user=sender,
+        avatar_filename=filename,
+        avatar_content_type="image/png",
+    )
+
+    avatar_url = f"/api/personnel/{sender.id}/avatar/"
+    # Another unit's picture is not part of the directory before a thread exists.
+    assert as_user(recipient).get(avatar_url).status_code == 404
+
+    conversation_id(as_user, sender, recipient)
+
+    shared = as_user(recipient).get(avatar_url)
+    assert shared.status_code == 200, shared.content
+    assert shared["Content-Type"] == "image/png"
+    assert b"".join(shared.streaming_content) == avatar_bytes
+
+    # Another person in the recipient's unit shares no thread and stays out.
+    bystander = make_user(unit=other_unit)
+    assert as_user(bystander).get(avatar_url).status_code == 404
+
+    (avatar_dir / filename).unlink(missing_ok=True)
 
 
 def test_an_empty_or_oversized_message_is_refused(unit, as_user):
