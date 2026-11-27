@@ -51,15 +51,18 @@ function personMeta(person) {
  * is empty when the person has not uploaded one, and an out-of-scope picture
  * returns 404, so both cases degrade to the same placeholder. */
 function PersonAvatar({ person, className = "msg-avatar" }) {
-  const [broken, setBroken] = useState(false);
-  if (person?.avatar_url && !broken) {
+  // Track the URL that failed, not a boolean: the same header instance is
+  // reused when another conversation opens, and a fresh picture must retry.
+  const [failedUrl, setFailedUrl] = useState("");
+  const src = person?.avatar_url;
+  if (src && src !== failedUrl) {
     return (
       <img
         className={`${className} avatar-photo`}
-        src={person.avatar_url}
+        src={src}
         alt=""
         aria-hidden="true"
-        onError={() => setBroken(true)}
+        onError={() => setFailedUrl(src)}
       />
     );
   }
