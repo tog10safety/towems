@@ -10081,11 +10081,15 @@ span.flight-fuel-value {
 }
 
 @media (max-width: 860px) {
-  /* One pane at a time: the list, then the thread with a back control. */
+  /* One pane at a time: the list, then the thread with a back control.
+     Fill the viewport below the 41px topbar and the 16px content padding on
+     each side. The old 190px reserve assumed a page header Messages does not
+     have, leaving a blank strip under the chat. */
   .messaging {
     grid-template-columns: 1fr;
-    height: calc(100dvh - 190px);
-    min-height: 380px;
+    height: calc(100dvh - 74px);
+    /* A short landscape viewport must shrink with the phone, not scroll. */
+    min-height: 0;
   }
   .messaging-thread {
     display: none;
@@ -10101,5 +10105,12 @@ span.flight-fuel-value {
   }
   .bubble {
     max-width: 85%;
+  }
+}
+
+@media (max-width: 560px) {
+  /* The smaller content padding gives the chat two more lines of height. */
+  .messaging {
+    height: calc(100dvh - 66px);
   }
 }
