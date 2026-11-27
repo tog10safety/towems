@@ -33,9 +33,15 @@ export default function NotificationsPage() {
   const [scope, setScope] = useState("action");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const summary = useApi("/notifications/summary/");
+  // This is the system inbox: private messages have their own page and badge,
+  // so they are excluded from the list, the counters and "mark all read".
+  const summary = useApi("/notifications/summary/?exclude_category=message");
   const { data, loading, error: loadError, reload } = useApi(
-    `/notifications/${qs({ scope, page_size: 50 })}`,
+    `/notifications/${qs({
+      scope,
+      page_size: 50,
+      exclude_category: "message",
+    })}`,
     { deps: [scope] }
   );
 
@@ -60,7 +66,10 @@ export default function NotificationsPage() {
   async function markAllRead() {
     setError("");
     try {
-      const result = await api.post("/notifications/mark-all-read/", {});
+      const result = await api.post(
+        "/notifications/mark-all-read/?exclude_category=message",
+        {}
+      );
       setNotice(`${result.updated} notification(s) marked read. Pending actions remain pending.`);
       refreshAll();
     } catch (err) {
@@ -96,8 +105,9 @@ export default function NotificationsPage() {
         <div>
           <h1>Notifications</h1>
           <p>
-            Reading an item clears the unread badge only. A task remains here until the required
-            work is completed and recorded in its own workflow.
+            System notices and actions only — private messages stay in Messages. Reading an
+            item clears the unread badge only. A task remains here until the required work is
+            completed and recorded in its own workflow.
           </p>
         </div>
         <Button variant="ghost" onClick={markAllRead}>

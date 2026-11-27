@@ -78,6 +78,29 @@ def test_the_bell_can_leave_private_messages_out(as_user, creator):
     assert summary["total"] == 1
 
 
+def test_mark_all_read_leaves_private_messages_unread(as_user, creator):
+    """The system inbox's bulk action must not touch messages it cannot show."""
+    system = action_notification(creator, title="System notice")
+    message = notify(
+        creator,
+        title="New message from Juan Dela Cruz",
+        message="Open Messages to read it.",
+        category="message",
+    )
+    client = as_user(creator)
+
+    response = client.post(
+        "/api/notifications/mark-all-read/?exclude_category=message",
+        {},
+        format="json",
+    )
+    assert response.status_code == 200
+    system.refresh_from_db()
+    message.refresh_from_db()
+    assert system.is_read is True
+    assert message.is_read is False
+
+
 def test_the_pulse_repeats_an_unread_emergency_on_a_fresh_page(as_user, creator):
     """A console that opens after the alarm still has to hear it."""
     urgent = action_notification(
