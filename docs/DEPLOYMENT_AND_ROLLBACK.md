@@ -29,7 +29,7 @@
 | Application directory | `/var/www/towems` — git clone of this repository, checked out at the release SHA, **owned `root:root` (0755)** |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
-| Deployed release | `369a1a6` — phone push: the Android install registers an FCM token on its `DeviceToken` row and every new notification is sent as a data message, so alerts arrive with the app closed instead of waiting for the watcher's next poll. Inert until `FCM_PROJECT_ID`/`FCM_CREDENTIALS_FILE` are set (§5.4). No SPA change, so `dist.prev-796bd7c` remains the rollback build. Record each new release here. |
+| Deployed release | `6d537fb` — phone push: each notification is sent with both a notification block and a data block, so Play Services draws the alert even when no TOWEMS process is running, while a live app still draws its own banner. Also the corrected TOWEMS launcher icon. Requires `FCM_PROJECT_ID`/`FCM_CREDENTIALS_FILE` (§5.4). No SPA change, so `dist.prev-796bd7c` remains the rollback build. Record each new release here. |
 | Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env`, **`WorkingDirectory=/var/www/towems/toms_backend`** |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
 | Secrets | `/var/www/towems/.env` (0600, `www-data`); backup job environment in `/etc/towems/backup.env` (0600) with `GNUPGHOME=/var/lib/towems/gnupg`; role password copies in `/etc/towems/towems_db_password` (0640 `root:www-data`) and `/etc/towems/postgres_password` (0600 root, operator only) |
@@ -602,10 +602,12 @@ It must print `True <username> 1`. Then close the app (swipe it away) and have s
 direct message: the phone must buzz with TOWEMS nowhere on screen.
 
 **What still limits delivery.** A phone with no Google Play services (some China-market ROMs)
-cannot receive FCM at all; the watcher remains its only transport. An app the user has
-*force-stopped* in Android settings receives nothing until it is opened again - that is Android's
-rule for every app, WhatsApp included. Push tokens are stored on the install's `DeviceToken` row,
-so signing out, changing the password or an expired alert token stops push with the same rows.
+cannot receive FCM at all; the watcher remains its only transport. Swiping the app out of
+recents is covered: every message carries a notification block, so Play Services draws the alert
+on the same channel without starting TOWEMS. An app the user has *force-stopped* in Android
+settings receives nothing until it is opened again - that is Android's rule for every app,
+WhatsApp included. Push tokens are stored on the install's `DeviceToken` row, so signing out,
+changing the password or an expired alert token stops push with the same rows.
 
 ## 6. Cutover checklist
 
