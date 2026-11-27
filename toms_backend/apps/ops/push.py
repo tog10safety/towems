@@ -107,14 +107,35 @@ def _tokens_for(user_id: int) -> list[str]:
 
 
 def _message(token: str, *, title: str, body: str, path: str, count: int, kind: str) -> dict:
-    """One FCM message. Data-only: the app owns the notification itself."""
+    """One FCM message.
+
+    It carries both a notification block and the data block. That redundancy is
+    the point: with the app running, Android hands the message to
+    ``TowemsMessagingService`` and the app draws its own banner (``onMessageReceived``
+    ignores the notification block). With the app swiped away - and on phones
+    whose battery manager refuses to start a dead app - Play Services draws the
+    notification block itself, so the alert still appears instead of being lost
+    waiting for a process Android will not start.
+
+    Both paths land on the same audible channel, the same badge count and the
+    same deep link (the data extras ride along on the tap intent).
+    """
+    channel = "towems_messages_v2" if kind == "message" else "towems_alerts_v2"
+    clean_title = (title or "TOWEMS")[:160]
+    clean_body = (body or "")[:400]
+    clean_path = (path or "/notifications")[:300]
     return {
         "message": {
             "token": token,
+            # The fallback Play Services renders with no app process alive.
+            "notification": {
+                "title": clean_title,
+                "body": clean_body,
+            },
             "data": {
-                "title": (title or "TOWEMS")[:160],
-                "body": (body or "")[:400],
-                "path": (path or "/notifications")[:300],
+                "title": clean_title,
+                "body": clean_body,
+                "path": clean_path,
                 "count": str(max(count, 0)),
                 # ``message`` and ``urgent`` pick the channel and category on
                 # the phone; anything else is a routine operational alert.
@@ -125,6 +146,16 @@ def _message(token: str, *, title: str, body: str, path: str, count: int, kind: 
                 # normal priority may be batched until the phone next wakes.
                 "priority": "high",
                 "ttl": "86400s",
+                "notification": {
+                    "channel_id": channel,
+                    "icon": "ic_stat_towems",
+                    # The launcher's unread number, the same one the app's own
+                    # banner carries.
+                    "notification_count": max(count, 0),
+                    # One banner per screen: a second alert about the same
+                    # conversation replaces the first instead of stacking.
+                    "tag": clean_path,
+                },
             },
         }
     }

@@ -90,8 +90,8 @@ def test_nothing_is_queued_without_firebase_configuration(
     assert callbacks == []
 
 
-def test_the_payload_is_data_only_and_never_chat_text():
-    """The phone draws the notification; FCM must not draw one of its own."""
+def test_the_payload_carries_a_system_fallback_and_the_chat_pointer():
+    """Play Services must be able to draw the alert if the app cannot start."""
     message = push._message(
         "phone-token",
         title="New message from Juan",
@@ -101,14 +101,23 @@ def test_the_payload_is_data_only_and_never_chat_text():
         kind="message",
     )["message"]
 
-    assert "notification" not in message
+    # With no app process, the system notification block is what appears.
+    assert message["notification"]["title"] == "New message from Juan"
+    assert message["notification"]["body"] == "Open Messages to read it."
+    assert message["android"]["notification"]["channel_id"] == "towems_messages_v2"
+    assert message["android"]["notification"]["notification_count"] == 4
+    assert message["android"]["notification"]["icon"] == "ic_stat_towems"
     assert message["android"]["priority"] == "high"
     assert message["data"]["kind"] == "message"
     assert message["data"]["count"] == "4"
-    assert message["data"]["title"] == "New message from Juan"
     assert message["data"]["path"] == "/messages?conversation=7"
     # The body is the server's pointer, not the conversation itself.
     assert message["data"]["body"] == "Open Messages to read it."
+    # A routine alert uses the alarm channel, not the chat one.
+    alert = push._message(
+        "phone-token", title="Abort", body="", path="/notifications", count=1, kind="urgent"
+    )["message"]
+    assert alert["android"]["notification"]["channel_id"] == "towems_alerts_v2"
 
 
 def test_a_phone_registers_its_fcm_token_with_its_alert_token(creator):

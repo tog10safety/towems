@@ -184,9 +184,16 @@ public class MainActivity extends BridgeActivity {
         }
         String path = intent.getStringExtra(EXTRA_PATH);
         if (path == null || path.isEmpty()) {
+            // A push Play Services drew itself (the app was swiped away) opens
+            // this activity with the data payload as extras, not with the
+            // watcher's extra. Same destination, different courier.
+            path = intent.getStringExtra("path");
+        }
+        if (path == null || path.isEmpty()) {
             return;
         }
         intent.removeExtra(EXTRA_PATH);
+        intent.removeExtra("path");
         final String url = AlertService.BASE_URL + (path.startsWith("/") ? path : "/" + path);
         if (getBridge() == null || getBridge().getWebView() == null) {
             return;
