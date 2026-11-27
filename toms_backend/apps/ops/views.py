@@ -7561,6 +7561,16 @@ class AirfieldViewSet(viewsets.ReadOnlyModelViewSet):
         return Airfield.objects.filter(is_active=True)
 
 
+def _exclude_categories(queryset, raw: str):
+    """Drop comma-separated categories from an inbox query.
+
+    The bell asks for ``exclude_category=message``: private messages have their
+    own counter and their own page, so they never sit among system notices.
+    """
+    names = [name.strip() for name in (raw or "").split(",") if name.strip()]
+    return queryset.exclude(category__in=names) if names else queryset
+
+
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """The recipient's notification inbox.
 
@@ -7609,11 +7619,16 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             )
         elif scope == "unread":
             queryset = queryset.filter(is_read=False)
-        return queryset
+        return _exclude_categories(
+            queryset, self.request.query_params.get("exclude_category")
+        )
 
     @action(detail=False, methods=["get"])
     def summary(self, request):
-        base = Notification.objects.filter(recipient_id=request.user.id)
+        base = _exclude_categories(
+            Notification.objects.filter(recipient_id=request.user.id),
+            request.query_params.get("exclude_category"),
+        )
         return Response(
             {
                 "unread": base.filter(is_read=False).count(),

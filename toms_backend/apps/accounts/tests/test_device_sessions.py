@@ -1,9 +1,9 @@
-"""One device at a time, for Creator accounts.
+"""One device at a time.
 
-A Creator may hold a single session. A second sign-in is refused with the
+An account holds a single live session. A second sign-in is refused with the
 device already signed in, and the person can confirm that the other session
-may end and continue on the new device. Every other role keeps multi-device
-access, which the Operations Center and Command posts need.
+may end and continue on the new device. A deployment can exempt a base role
+through ``SINGLE_DEVICE_EXEMPT_ROLES`` when a desk genuinely needs two screens.
 """
 
 from __future__ import annotations
@@ -138,7 +138,23 @@ def test_signing_out_frees_the_creator_device(creator):
     assert _sign_in(second, creator).status_code == 200
 
 
-def test_an_administrator_can_stay_signed_in_on_two_devices(admin):
+def test_an_administrator_is_held_to_one_device_too(admin):
+    first = _client()
+    assert _sign_in(first, admin).status_code == 200
+
+    second = _client()
+    response = _sign_in(second, admin)
+
+    # Every role is held to one session by default, not only a Creator.
+    assert response.status_code == 409
+    assert response.json()["errors"]["code"] == "device_in_use"
+    assert first.get("/api/auth/me/").status_code == 200
+    assert second.get("/api/auth/me/").status_code in (401, 403)
+
+
+def test_an_exempted_role_may_stay_signed_in_on_two_devices(admin, settings):
+    settings.SINGLE_DEVICE_EXEMPT_ROLES = ["administrator"]
+
     first = _client()
     assert _sign_in(first, admin).status_code == 200
 

@@ -58,14 +58,19 @@ export default function NotificationBell() {
   // until somebody deals with them, because a desk may be looking elsewhere.
   const [alerts, setAlerts] = useState([]);
   const lastSeen = useRef(null);
-  const summary = useApi("/notifications/summary/");
+  // The bell is the system's: private messages have their own counter beside
+  // Online and their own page, so they are excluded from both requests.
+  const summary = useApi("/notifications/summary/?exclude_category=message");
   // Show the latest notifications, not only actions: higher authorities
   // receive informational routing notices that must still be visible here.
-  const notifications = useApi("/notifications/?page_size=30");
+  const notifications = useApi(
+    "/notifications/?page_size=30&exclude_category=message"
+  );
   // The panel is a work list, not a feed: an action stays until the work is
   // done, while a notice that has been read has no reason to sit here any
   // longer - it remains on the Notifications page.
   const items = [...(notifications.data?.results ?? [])]
+    .filter((item) => item.category !== "message")
     .filter((item) => !item.is_read || item.is_pending_action)
     .sort(
       (a, b) => Number(Boolean(b.is_pending_action)) - Number(Boolean(a.is_pending_action))

@@ -1,10 +1,11 @@
-"""One device at a time, for the roles that asked for it.
+"""One device at a time, unless a role is exempted.
 
-A Creator account may be signed in on exactly one device. A second sign-in is
-refused with a body that names the device already holding the session, plus a
+An account may be signed in on exactly one device. A second sign-in is refused
+with a body that names the device already holding the session, plus a
 short-lived signed challenge; the person can then choose to end that session
-and continue here. Every other role keeps multi-device access, which the
-Operations Center and Command posts need to do their work.
+and continue here. A deployment that needs a watch desk signed in on two
+screens can name the base roles to exempt in
+``TOMS_SINGLE_DEVICE_EXEMPT_ROLES``; by default nobody is exempt.
 
 Django's ``django_session`` table remains the source of truth for whether a
 session is alive. This module only adds the account and device to each session
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import secrets
 
+from django.conf import settings
 from django.contrib.sessions.models import Session
 from django.core import signing
 from django.core.exceptions import ValidationError
@@ -23,9 +25,6 @@ from django.utils import timezone
 from rest_framework.exceptions import APIException
 
 from apps.core import roles
-
-#: Roles limited to one device, by their legacy base role (``users.authority``).
-SINGLE_DEVICE_ROLES = frozenset({roles.ROLE_CREATOR})
 
 #: Signed token that authorises ending the other device's session.
 CONFLICT_SALT = "towems.device-conflict"
@@ -45,8 +44,18 @@ class DeviceConflict(APIException):
 
 
 def requires_single_device(user) -> bool:
-    """True for the roles that may hold one session at a time."""
-    return roles.base_role(user) in SINGLE_DEVICE_ROLES
+    """True unless the account's base role is explicitly exempted.
+
+    The exemption is read from settings on each call so a deployment can change
+    it without a code change; the names are base roles from ``apps.core.roles``
+    (``administrator``, ``safety_officer``, ``evaluator``, ``creator``).
+    """
+    exempt = {
+        str(role).strip().lower()
+        for role in getattr(settings, "SINGLE_DEVICE_EXEMPT_ROLES", ())
+        if role
+    }
+    return roles.base_role(user) not in exempt
 
 
 def device_label(user_agent: str) -> str:

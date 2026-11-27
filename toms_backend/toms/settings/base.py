@@ -198,6 +198,13 @@ SESSION_COOKIE_AGE = int(env("TOMS_SESSION_AGE", "3600"))
 #: session: it only reads the notification pulse and the message count, and is
 #: revoked on sign-out, password change and expiry.
 DEVICE_TOKEN_AGE_DAYS = int(env("TOMS_DEVICE_TOKEN_AGE_DAYS", "30"))
+#: Base roles allowed to stay signed in on more than one device. Empty means
+#: every account holds one session at a time; a watch desk that genuinely needs
+#: two screens can list its role here (``administrator,commander``). Base roles
+#: are the legacy ``users.authority`` values mapped in ``apps.core.roles``.
+SINGLE_DEVICE_EXEMPT_ROLES = [
+    role.strip().lower() for role in env_list("TOMS_SINGLE_DEVICE_EXEMPT_ROLES")
+]
 
 CSRF_COOKIE_HTTPONLY = False  # the SPA reads it to set the X-CSRFToken header
 CSRF_COOKIE_SAMESITE = "Lax"

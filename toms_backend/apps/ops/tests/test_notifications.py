@@ -53,6 +53,31 @@ def test_the_pulse_announces_a_new_urgent_item_once(as_user, creator):
     assert body["unread"] == 2
 
 
+def test_the_bell_can_leave_private_messages_out(as_user, creator):
+    """Message notices belong to the Messages counter, not the system bell."""
+    system = action_notification(
+        creator, title="System notice", requires_action=False
+    )
+    message = notify(
+        creator,
+        title="New message from Juan Dela Cruz",
+        message="Open Messages to read it.",
+        category="message",
+    )
+    client = as_user(creator)
+
+    listed = client.get("/api/notifications/?exclude_category=message").json()
+    ids = [row["id"] for row in listed["results"]]
+    assert system.id in ids
+    assert message.id not in ids
+
+    summary = client.get(
+        "/api/notifications/summary/?exclude_category=message"
+    ).json()
+    assert summary["unread"] == 1
+    assert summary["total"] == 1
+
+
 def test_the_pulse_repeats_an_unread_emergency_on_a_fresh_page(as_user, creator):
     """A console that opens after the alarm still has to hear it."""
     urgent = action_notification(

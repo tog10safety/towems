@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { api } from "../api/client.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { syncPushSubscription } from "../push.js";
 import { useTheme } from "../theme/ThemeContext.jsx";
 import Icon from "./Icon.jsx";
+import MessagesButton from "./MessagesButton.jsx";
 import NotificationBell from "./NotificationBell.jsx";
 import OnlineNow from "./OnlineNow.jsx";
 import { Badge, Button } from "./ui.jsx";
@@ -104,9 +104,6 @@ const NAV_GROUPS = [
   {
     label: "Command",
     items: [
-      // Private one-to-one messaging between TOWEMS accounts. Every signed-in
-      // person has it; the server scopes each thread to its two participants.
-      { to: "/messages", label: "Messages", icon: "feedback" },
       { to: "/instructions", label: "Instructions", icon: "instructions" },
       { to: "/reports", label: "Reports", icon: "reports" },
       { to: "/audit", label: "Audit Trail", icon: "audit", permission: "view_audit_log" },
@@ -126,29 +123,6 @@ export default function Layout() {
   const { resolvedTheme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
-  // Unread private messages, for the menu badge. Polled gently: the badge is a
-  // reminder, not a live counter, and the page itself refreshes faster.
-  const [unreadMessages, setUnreadMessages] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadUnread() {
-      try {
-        const data = await api.get("/messaging/summary/");
-        if (!cancelled) setUnreadMessages(data.unread_total || 0);
-      } catch {
-        // The badge must never break the shell.
-      }
-    }
-    loadUnread();
-    const timer = setInterval(() => {
-      if (!document.hidden) loadUnread();
-    }, 30000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
 
   // Refresh the browser-push subscription on sign-in. This only runs after the
   // person already granted notification permission on the Messages page, so it
@@ -199,11 +173,6 @@ export default function Layout() {
                 >
                   <Icon name={item.icon} className="nav-icon" />
                   {item.label}
-                  {item.to === "/messages" && unreadMessages > 0 && (
-                    <span className="nav-count">
-                      {unreadMessages > 99 ? "99+" : unreadMessages}
-                    </span>
-                  )}
                 </NavLink>
               ))}
             </div>
@@ -274,7 +243,9 @@ export default function Layout() {
             >
               <Icon name={resolvedTheme === "dark" ? "sun" : "moon"} size={19} />
             </button>
-            {/* Who is on the system, in the top bar beside Settings. */}
+            {/* Messages and who is on the system, before the system bell: a
+                private chat is not a system notice. */}
+            <MessagesButton />
             <OnlineNow />
             <NavLink
               className="icon-btn"
