@@ -489,14 +489,42 @@ class DeviceSessionListView(APIView):
 
     def get(self, request):
         key = request.session.session_key
-        current = []
-        others = device_sessions.other_devices(request.user)
+        current, others = device_sessions.current_and_others(request.user, key)
         payload = {
             "single_device": device_sessions.requires_single_device(request.user),
             "current": key[:8] if key else "",
+            "current_device": current,
             "devices": others,
         }
         return Response(payload)
+
+
+class DeviceSessionEndView(APIView):
+    """End one of this account's other sessions from Settings."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        enforce_csrf(request)
+        ended = device_sessions.end_other_session(
+            request.user,
+            str(request.data.get("session") or ""),
+            request.session.session_key,
+        )
+        if ended is None:
+            return Response(
+                {"detail": "That device is no longer signed in.", "errors": {}},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        log_action(
+            actor=request.user,
+            action="device_session_end",
+            entity_type="auth",
+            entity_id=request.user.id,
+            note=f"Ended the session on {ended['label']}",
+            request=request,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class DeviceTokenView(APIView):

@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext.jsx";
 import Icon from "../components/Icon.jsx";
 import {
   Badge,
+  Button,
   Card,
   Detail,
   ErrorBanner,
@@ -143,6 +144,92 @@ function GroupChatOversight() {
   );
 }
 
+function SignedInDevices() {
+  const { data, loading, error, reload } = useApi("/auth/devices/");
+  const [ending, setEnding] = useState("");
+  const [actionError, setActionError] = useState("");
+
+  async function endSession(device) {
+    if (
+      !window.confirm(
+        `Sign out ${device.label}? That device will need to sign in again, and its alerts stop.`
+      )
+    ) {
+      return;
+    }
+    setEnding(device.session);
+    setActionError("");
+    try {
+      await api.post("/auth/devices/end/", { session: device.session });
+      reload();
+    } catch (err) {
+      setActionError(err.message || "Unable to end that session.");
+    } finally {
+      setEnding("");
+    }
+  }
+
+  const current = data?.current_device;
+  const others = data?.devices ?? [];
+
+  return (
+    <Card title="Signed-in devices">
+      <p className="hint" style={{ marginBottom: 14 }}>
+        {data?.single_device
+          ? "This account is limited to one signed-in device at a time. Ending a session here is the same as signing out on that device, and its alerts stop."
+          : "This account may stay signed in on more than one device. Ending a session here is the same as signing out on that device."}
+      </p>
+      {loading && !data ? (
+        <Loading label="Loading signed-in devices…" />
+      ) : (
+        <ul className="settings-group-list">
+          {current && (
+            <li className="settings-group-row">
+              <span className="settings-group-text">
+                <strong>{current.label}</strong>
+                <span className="hint">
+                  {current.ip_address ? `${current.ip_address} · ` : ""}
+                  Signed in {current.since ? formatDateTime(current.since) : "recently"}
+                </span>
+              </span>
+              <Badge tone="success">This device</Badge>
+            </li>
+          )}
+          {others.map((device) => (
+            <li className="settings-group-row" key={device.session}>
+              <span className="settings-group-text">
+                <strong>{device.label}</strong>
+                <span className="hint">
+                  {device.ip_address ? `${device.ip_address} · ` : ""}
+                  Last seen {""}
+                  {device.last_seen ? formatDateTime(device.last_seen) : "recently"}
+                </span>
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={ending === device.session}
+                onClick={() => endSession(device)}
+              >
+                {ending === device.session ? "Ending…" : "End session"}
+              </Button>
+            </li>
+          ))}
+          {!others.length && (
+            <li className="settings-group-row">
+              <span className="settings-group-text">
+                <span className="hint">No other devices are signed in.</span>
+              </span>
+            </li>
+          )}
+        </ul>
+      )}
+      <ErrorBanner message={actionError} />
+      {error && <ErrorBanner message={error} />}
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const { theme, resolvedTheme, setTheme, error } = useTheme();
@@ -225,6 +312,8 @@ export default function SettingsPage() {
           })}
         </div>
       </Card>
+
+      <SignedInDevices />
 
       {messagingSettings?.can_manage && (
         <Card title="Messaging security">

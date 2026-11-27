@@ -37,6 +37,12 @@ urlpatterns = [
         views.DeviceSessionListView.as_view(),
         name="auth-devices",
     ),
+    # Settings: sign out one of the account's other devices.
+    path(
+        "auth/devices/end/",
+        views.DeviceSessionEndView.as_view(),
+        name="auth-device-end",
+    ),
     # The Android shell's alert watcher exchanges its live session for one
     # narrow, long-lived token that only reads the pulse and message summary.
     path(

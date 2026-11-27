@@ -173,3 +173,69 @@ def test_the_device_record_names_the_browser(creator):
     row = DeviceSession.objects.get(user=creator)
     assert row.device_label
     assert row.session_key == client.session.session_key
+
+
+def _devices(client):
+    return client.get("/api/auth/devices/").json()
+
+
+def _end_session(client, session):
+    token = client.cookies[settings.CSRF_COOKIE_NAME].value
+    return client.post(
+        "/api/auth/devices/end/",
+        {"session": session},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+
+
+def test_the_device_panel_lists_the_current_device_and_the_others(admin, settings):
+    settings.SINGLE_DEVICE_EXEMPT_ROLES = ["administrator"]
+    first = _client()
+    assert _sign_in(first, admin).status_code == 200
+    second = _client()
+    assert _sign_in(second, admin).status_code == 200
+
+    body = _devices(second)
+    assert body["current_device"]["session"]
+    assert body["current_device"]["label"]
+    assert len(body["devices"]) == 1
+    assert body["devices"][0]["session"] != body["current_device"]["session"]
+    assert body["devices"][0]["session"] == first.session.session_key[:8]
+
+
+def test_the_device_panel_ends_another_device(admin, settings):
+    settings.SINGLE_DEVICE_EXEMPT_ROLES = ["administrator"]
+    first = _client()
+    assert _sign_in(first, admin).status_code == 200
+    second = _client()
+    assert _sign_in(second, admin).status_code == 200
+
+    other = _devices(second)["devices"][0]
+    assert _end_session(second, other["session"]).status_code == 204
+
+    assert first.get("/api/auth/me/").status_code in (401, 403)
+    assert second.get("/api/auth/me/").status_code == 200
+    assert _devices(second)["devices"] == []
+
+
+def test_the_device_panel_refuses_to_end_the_current_device(admin):
+    client = _client()
+    assert _sign_in(client, admin).status_code == 200
+    current = _devices(client)["current_device"]
+
+    assert _end_session(client, current["session"]).status_code == 404
+    assert client.get("/api/auth/me/").status_code == 200
+
+
+def test_another_account_cannot_end_someone_elses_device(admin, settings, creator):
+    settings.SINGLE_DEVICE_EXEMPT_ROLES = ["administrator"]
+    first = _client()
+    assert _sign_in(first, admin).status_code == 200
+
+    intruder = _client()
+    assert _sign_in(intruder, creator).status_code == 200
+    victim = _devices(first)["current_device"]
+
+    assert _end_session(intruder, victim["session"]).status_code == 404
+    assert first.get("/api/auth/me/").status_code == 200

@@ -183,16 +183,7 @@ def _live_devices(user, *, exclude_key: str | None = None) -> list[dict]:
     """Every other device holding this account, tracked or not."""
     devices = [_describe(row) for row in _live_rows(user, exclude_key=exclude_key)]
     for session in _untracked_sessions(user, exclude_key=exclude_key):
-        devices.append(
-            {
-                "session": session.session_key[:8],
-                "label": "Another browser session",
-                "ip_address": "",
-                "since": "",
-                "last_seen": "",
-                "untracked": True,
-            }
-        )
+        devices.append(_describe_untracked(session))
     return devices
 
 
@@ -209,6 +200,74 @@ def _describe(row) -> dict:
 def other_devices(user) -> list[dict]:
     """Devices other than the caller's that currently hold a session."""
     return _live_devices(user)
+
+
+def _describe_untracked(session) -> dict:
+    return {
+        "session": session.session_key[:8],
+        "label": "Another browser session",
+        "ip_address": "",
+        "since": "",
+        "last_seen": "",
+        "untracked": True,
+    }
+
+
+def current_and_others(
+    user, current_key: str | None = None
+) -> tuple[dict | None, list[dict]]:
+    """The caller's live session, described separately from every other one.
+
+    Settings shows the current device as "This device" and offers to end the
+    rest; the current session is ended by signing out, not from that list.
+    """
+    current = None
+    others = []
+    for row in _live_rows(user):
+        described = _describe(row)
+        if current_key and row.session_key == current_key:
+            current = described
+        else:
+            others.append(described)
+
+    for session in _untracked_sessions(user):
+        described = _describe_untracked(session)
+        if current_key and session.session_key == current_key:
+            current = described
+        else:
+            others.append(described)
+    return current, others
+
+
+def end_other_session(
+    user, session_id: str, current_key: str | None = None
+) -> dict | None:
+    """End one of this account's other sessions, by its short id.
+
+    Returns the ended device's description, or ``None`` when no other live
+    session matches. The current session is deliberately out of reach: signing
+    out is the logout action, and a prefix can only match this account's rows.
+    """
+    prefix = (session_id or "").strip()
+    if len(prefix) < 8:
+        return None
+
+    for row in _live_rows(user):
+        if row.session_key == current_key or not row.session_key.startswith(prefix):
+            continue
+        described = _describe(row)
+        end_session(row.session_key)
+        return described
+
+    for session in _untracked_sessions(user):
+        if session.session_key == current_key or not session.session_key.startswith(
+            prefix
+        ):
+            continue
+        described = _describe_untracked(session)
+        end_session(session.session_key)
+        return described
+    return None
 
 
 def remember(user, request, session_key: str) -> None:
