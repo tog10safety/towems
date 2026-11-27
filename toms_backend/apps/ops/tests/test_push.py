@@ -139,6 +139,20 @@ def test_a_phone_registers_its_fcm_token_with_its_alert_token(creator):
     assert DeviceToken.objects.get(user=creator).fcm_token == ""
 
 
+def test_the_pulse_tells_a_registered_phone_to_stop_drawing_banners(creator):
+    raw = _device_token(APIClient(), creator)
+    phone = APIClient()
+    phone.credentials(HTTP_AUTHORIZATION=f"Device {raw}")
+
+    # A phone without a push token still needs the watcher's banners.
+    assert phone.get("/api/notifications/pulse/").json()["push"] is False
+
+    phone.post("/api/auth/devices/push/", {"fcm_token": "fcm-abc-123"}, format="json")
+
+    # Now push is the only source of banners; the poll feeds the summary.
+    assert phone.get("/api/notifications/pulse/").json()["push"] is True
+
+
 def test_a_session_cannot_register_a_token_against_another_install(
     as_user, creator, evaluator
 ):

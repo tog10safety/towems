@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.service.notification.StatusBarNotification;
 import android.util.Log;
 import android.webkit.CookieManager;
 
@@ -381,9 +382,15 @@ public class AlertService extends Service {
                 ? pulse.optInt("unread_messages", 0)
                 : -1;
         int waiting = Math.max(unread, Math.max(messages, 0));
-        showUnreadSummary(waiting);
-        // Posted even while a TOWEMS screen is open: a chat app buzzes wherever
-        // you are, and the in-app bell is only visible on its own page.
+        // Whether this install has a registered FCM token, as the server sees
+        // it. Push is then the only source of banners - Play Services or the
+        // app's push service already drew the alert, and a banner from this
+        // poll would be the same notice twice. Without a token the poll keeps
+        // drawing banners exactly as before.
+        boolean pushActive = pulse.has("push")
+                ? pulse.optBoolean("push", false)
+                : prefs.getString(FCM_REGISTERED_KEY, null) != null;
+        showUnreadSummary(waiting, pushActive);
         boolean messageBanner = false;
         if (!firstRun && urgent != null) {
             for (int index = 0; index < urgent.length(); index += 1) {
@@ -395,7 +402,12 @@ public class AlertService extends Service {
                 if (id == 0 || seen.contains(id)) {
                     continue;
                 }
+                // The watermark advances either way, so a phone that loses its
+                // push token does not replay old items as new banners.
                 seen.add(id);
+                if (pushActive) {
+                    continue;
+                }
                 messageBanner |= "message".equals(row.optString("category", ""));
                 showAlert(row, waiting);
             }
@@ -406,7 +418,7 @@ public class AlertService extends Service {
             // The row above already announced the first message of a thread, so
             // only the messages it did not stand for are worth another buzz.
             int extra = messages - Math.max(previous, 0) - (messageBanner ? 1 : 0);
-            if (!firstRun && previous >= 0 && extra > 0) {
+            if (!pushActive && !firstRun && previous >= 0 && extra > 0) {
                 showIncomingMessages(extra, waiting);
             }
         }
@@ -420,7 +432,7 @@ public class AlertService extends Service {
 
         // A server that predates ``items`` still has to make the phone buzz for
         // a message: the unread count is the only thing it offers there.
-        if (!pulse.has("items")) {
+        if (!pulse.has("items") && !pushActive) {
             pollMessages(cookie, token);
         }
         return POLL_MS;
@@ -438,7 +450,7 @@ public class AlertService extends Service {
             return;
         }
         int unread = summary.optInt("unread_total", 0);
-        showUnreadSummary(unread);
+        showUnreadSummary(unread, false);
         int previous = prefs.getInt("unread_total", -1);
         prefs.edit().putInt("unread_total", unread).apply();
         if (unread <= 0) {
@@ -537,7 +549,7 @@ public class AlertService extends Service {
      * that are already read. Reading in the app therefore clears the icon on the
      * next poll rather than whenever the phone is tidied up.
      */
-    private void showUnreadSummary(int unread) {
+    private void showUnreadSummary(int unread, boolean pushActive) {
         if (unread <= 0) {
             cancel(SUMMARY_NOTIFICATION_ID);
             cancel(MESSAGES_NOTIFICATION_ID);
@@ -546,12 +558,13 @@ public class AlertService extends Service {
             for (Long id : seen) {
                 cancel(alertNotificationId(id));
             }
-            // Push banners live outside ``seen``; without this the icon would
+            // Push banners live outside ``seen``; without these the icon would
             // stay lit after reading a message that arrived by FCM.
             cancelPostPushes();
+            cancelSystemPushes();
             return;
         }
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ALERTS)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ALERTS)
                 .setSmallIcon(R.drawable.ic_stat_towems)
                 .setContentTitle(unread == 1 ? "1 unread item" : unread + " unread items")
                 .setContentText("Open TOWEMS to read them.")
@@ -560,14 +573,19 @@ public class AlertService extends Service {
                 .setGroup(GROUP_ALERTS)
                 .setGroupSummary(true)
                 .setAutoCancel(true)
-                // Heard once when it appears, quiet on the twenty-second refresh:
-                // a count is worth a sound when it is new, not every time it is read.
-                .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
-                .setContentIntent(openIntent(this, "/notifications", 3))
-                .build();
-        notifyIfAllowed(SUMMARY_NOTIFICATION_ID, notification);
+                .setContentIntent(openIntent(this, "/notifications", 3));
+        if (pushActive) {
+            // The push already sounded. The summary is a badge and a count, not
+            // a second announcement, so it must not buzz again.
+            builder.setSilent(true);
+        } else {
+            // Heard once when it appears, quiet on the twenty-second refresh:
+            // a count is worth a sound when it is new, not every time it is read.
+            builder.setOnlyAlertOnce(true);
+        }
+        notifyIfAllowed(SUMMARY_NOTIFICATION_ID, builder.build());
     }
 
     private void showPendingActions(int pending) {
@@ -848,6 +866,32 @@ public class AlertService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             manager.cancel(id);
+        }
+    }
+
+    /**
+     * Remove notifications Play Services drew from a push, once everything is read.
+     *
+     * Those carry no numeric id, only the tag the server set (the screen path),
+     * so they are found through the active list rather than an id this app would
+     * have to remember across processes.
+     */
+    private void cancelSystemPushes() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) {
+            return;
+        }
+        try {
+            for (StatusBarNotification active : manager.getActiveNotifications()) {
+                if (active.getId() == 0 && active.getTag() != null) {
+                    manager.cancel(active.getTag(), 0);
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // An OEM that hides the list must not crash the watcher.
         }
     }
 

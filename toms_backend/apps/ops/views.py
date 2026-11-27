@@ -7721,11 +7721,17 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
 
         unread_messages = inbox_unread_total(request.user)
 
+        # True only for an install that has registered an FCM token. Its
+        # banners come from push now, so this poll feeds the unread summary and
+        # does not draw a second copy of what Play Services already showed.
+        push_registered = bool(getattr(request.auth, "fcm_token", ""))
+
         return Response(
             {
                 "latest_id": latest_id,
                 "unread": base.filter(is_read=False).count(),
                 "unread_messages": unread_messages,
+                "push": push_registered,
                 "pending_actions": base.filter(
                     requires_action=True,
                     action_status__in=[

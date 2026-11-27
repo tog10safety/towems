@@ -774,6 +774,34 @@ def _notify_mentions(conversation, sender, mentioned) -> None:
     )
 
 
+def _push_phone_message(conversation, sender, recipient) -> None:
+    """One FCM alert per message, even when the bell already has a notice.
+
+    The bell keeps a single unread notice per thread, so the second message in
+    a chat writes no row - and the model hook that turns a notice into a push
+    would never fire. A phone still has to buzz for that message, so this
+    covers exactly the messages whose notice already existed. The body stays a
+    pointer, never the conversation itself.
+    """
+    from apps.ops import push
+
+    if not push.configured():
+        return
+    recipient_id = recipient.id
+    title = f"New message from {_display_name(sender)}"[:200]
+    path = f"/messages?conversation={conversation.id}"
+    transaction.on_commit(
+        lambda: push.queue_notification(
+            recipient_id=recipient_id,
+            title=title,
+            body="Open Messages to read it.",
+            path=path,
+            priority="high",
+            category="message",
+        )
+    )
+
+
 def _notify_group_members(conversation, sender, mentioned=()) -> None:
     """Give every member of a group the one-per-thread notice a private chat gets.
 
@@ -788,8 +816,10 @@ def _notify_group_members(conversation, sender, mentioned=()) -> None:
     # people come from the unit (minus the Operations Center's hidden members),
     # an approved group's from its selected members.
     for person in conversation_people(conversation, sender):
-        if person.id not in skip:
-            _notify_recipient(conversation, sender, person)
+        if person.id in skip:
+            continue
+        if _notify_recipient(conversation, sender, person) is None:
+            _push_phone_message(conversation, sender, person)
 
 
 def _queue_closed_tab_push(conversation, sender, recipient, message) -> None:
@@ -891,7 +921,8 @@ def send_message(
     # mentions only.
     recipient = None if conversation.is_group() else peer_of(conversation, sender)
     if recipient is not None:
-        _notify_recipient(conversation, sender, recipient)
+        if _notify_recipient(conversation, sender, recipient) is None:
+            _push_phone_message(conversation, sender, recipient)
         _queue_closed_tab_push(conversation, sender, recipient, message)
     elif not conversation.is_group_request():
         _notify_group_members(conversation, sender, mentioned)

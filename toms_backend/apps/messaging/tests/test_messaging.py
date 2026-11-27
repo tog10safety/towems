@@ -380,3 +380,44 @@ def test_a_mentioned_member_is_told_once_not_twice(unit, as_user):
     )
     assert len(titles) == 1
     assert "mentioned" in titles[0]
+
+
+def test_every_message_pushes_the_phone_even_when_the_bell_has_a_notice(
+    unit, as_user, monkeypatch, django_capture_on_commit_callbacks
+):
+    """The bell keeps one notice per thread; the phone must still buzz per message.
+
+    The model hook only fires when a notice row is created, so the second
+    message in a chat would reach no phone at all. The send path pushes
+    explicitly for exactly that case.
+    """
+    from apps.accounts.models import User
+    from apps.messaging import services
+    from apps.ops import push
+
+    sender = make_user(unit=unit)
+    recipient = make_user(unit=unit)
+    conversation_pk = conversation_id(as_user, sender, recipient)
+    conversation = Conversation.objects.get(pk=conversation_pk)
+
+    monkeypatch.setattr(push, "configured", lambda: True)
+    queued = []
+    monkeypatch.setattr(push, "queue_notification", lambda **kwargs: queued.append(kwargs))
+
+    # pytest-django keeps the test in a transaction, so the send's on_commit
+    # hooks are captured and run explicitly for each message.
+    with django_capture_on_commit_callbacks(execute=True):
+        services.send_message(conversation, User.objects.get(pk=sender.id), "first")
+    with django_capture_on_commit_callbacks(execute=True):
+        services.send_message(conversation, User.objects.get(pk=sender.id), "second")
+
+    # One push from the new notice's model hook, one from the explicit path for
+    # the second message whose notice already existed.
+    assert len(queued) == 2
+    assert {row["recipient_id"] for row in queued} == {recipient.id}
+    assert all(row["category"] == "message" for row in queued)
+    assert all(
+        row["path"] == f"/messages?conversation={conversation.id}" for row in queued
+    )
+    # Never a copy of the conversation itself.
+    assert all(row["body"] == "Open Messages to read it." for row in queued)
