@@ -262,6 +262,7 @@ export default function MessagesPage() {
     setThread(null);
     setThreadLoading(true);
     setThreadError("");
+    autoScroll.current = true;
     const next = new URLSearchParams(searchParams);
     next.delete("conversation");
     setSearchParams(next, { replace: true });
@@ -380,6 +381,9 @@ export default function MessagesPage() {
     // private thread must not stand in for a routing thread opened by id.
     setThread(null);
     setThreadLoading(true);
+    // Every open starts at the newest message, even when the same thread was
+    // already active and the person had scrolled up to read older ones.
+    autoScroll.current = true;
     // Opening a thread leaves the inbox search behind: keeping the term in the
     // box while the pane showed conversations again was confusing.
     setSearchResults(null);
