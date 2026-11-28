@@ -4,9 +4,9 @@
 > (droplet `146.190.94.234`). Sections 1 and 1.1 record the layout that now runs there; the
 > remaining steps are the operating procedure for later releases.
 >
-> **Live release: `d5b0ef7`** (production checkout, 2026-11-28). Lead notifications open
-> the driver view maximised, and a completed mission shows only its movement log. The SPA is
-> `assets/index-Bt3gplH6.js`; the hosted `TOWEMS-1.2.apk` remains the `c834f2e` build. See
+> **Live release: `11dff9e`** (production checkout, 2026-11-28). Adds the armory API,
+> the dedicated web register and the offline desktop source. The SPA is
+> `assets/index-CYwqvF_b.js`; the hosted `TOWEMS-1.2.apk` remains the `c834f2e` build. See
 > section 1.1.
 
 ---
@@ -18,7 +18,7 @@
 | Legacy Flask MRMS | Installed at `/var/www/mrm`; `mrm.service` stopped and disabled (rollback path). |
 | `toms_backend` (Django/DRF) | Deployed at `/var/www/towems`, serving `127.0.0.1:8001` via `towems.service`. |
 | `toms_frontend` (React/Vite) | Deployed to `/var/www/towems/toms_frontend/dist` and served by nginx. |
-| Production DB `mrm_system` | 87 migrations applied; 11 legacy tables untouched and still mapped. |
+| Production DB `mrm_system` | 110 migrations applied; 11 legacy tables untouched and still mapped. |
 | Staging DB `toms_staging` | Clone of production + the 21 additive tables. Where all Django DDL ran first. |
 
 ### 1.1 Production layout (as built on the droplet)
@@ -30,8 +30,8 @@
 | Application directory | `/var/www/towems` — git clone of this repository, checked out at the release SHA, **owned `root:root` (0755)** |
 | Python | system `python3.10` with `/var/www/towems/venv` |
 | Node | **not installed** — build the SPA elsewhere and upload `dist/` |
-| Live release | `d5b0ef7` (production checkout, 2026-11-28) — lead-designation notifications open the driver view maximised, and a completed mission replaces the driver controls with the movement log. SPA is `assets/index-Bt3gplH6.js`; previous live checkout was `4b6e86a`. |
-| SPA / APK release | 2026-11-28 — SPA bundle `assets/index-Bt3gplH6.js` uploaded to `/var/www/towems/toms_frontend/dist`; hosted `/TOWEMS-1.2.apk` unchanged from the `c834f2e` build (6,056,067 bytes; SHA-256 `312db980625caf41653f4e26185b63d966aa0371a7791989fa6c4272f52d0027`); SPA rollback copy `dist.prev-4b6e86a`. |
+| Live release | `11dff9e` (production checkout, 2026-11-28) — armory management API, web register and offline desktop synchronization. SPA is `assets/index-CYwqvF_b.js`; previous live checkout was `d5b0ef7`. |
+| SPA / APK release | 2026-11-28 — SPA bundle `assets/index-CYwqvF_b.js` uploaded to `/var/www/towems/toms_frontend/dist`; hosted `/TOWEMS-1.2.apk` unchanged from the `c834f2e` build (6,056,067 bytes; SHA-256 `312db980625caf41653f4e26185b63d966aa0371a7791989fa6c4272f52d0027`); SPA rollback copy `dist.prev-11dff9e`. |
 | Previous release | `8f25289` — a shared Messages thread now authorizes a participant's avatar across units for the avatar endpoint only; the personnel directory and its unit scope are unchanged. Messages identities use rank + surname (e.g. `COL SANTOS`) and profile pictures in the inbox, thread header, member roster and both sides of the bubbles, falling back to initials when a picture is absent or out of scope (and retrying when another conversation opens); notification titles use the short name too. The mobile Messages pane fills the phone viewport below the measured chrome (49px topbar + content padding: `100dvh - 81px`, `100dvh - 73px` under 560px), removing the blank strip under the conversation without overflowing; a short landscape viewport shrinks rather than scrolling. Conversations have a long-press (or right-click) menu: mark unread, pin, mute, select, archive and delete, with an Archived view and bulk archive/mute/delete in selection mode. The state is per person on `ConversationMember`; muted threads send no alerts (including the Messages page's own browser alert), and a new message restores a deleted thread. The unused dashboard `notifications` counts (which included message notices) are gone; the system inbox summary is the only notification counter. Messages opens a conversation on its newest message, including from a notification deep link or when the same thread is re-opened after scrolling up, instead of leaving it below the fold at the oldest message. The server's notification list and summary exclude private message notices by default; a caller must pass `include_messages=true` to see them, so a new screen cannot mix them into the system inbox. The pulse still carries messages for phones, and the bell and Notifications page ask for the exclusion explicitly. The Notifications inbox also keeps messages out of its counters and Mark all read action. Settings has a Signed-in devices panel: it lists the live sessions, marks the current one, and ends another device (revoking that session and its alert token). Every account is held to one live session at a time unless its base role is named in `TOMS_SINGLE_DEVICE_EXEMPT_ROLES` (empty by default); a second sign-in names the device already holding it and offers to end that session. Messages sits beside Online with its own unread badge, and the bell excludes message notices (`exclude_category=message`). Phone push is still the only banner source on an install with a push token (requires `FCM_PROJECT_ID`/`FCM_CREDENTIALS_FILE`, §5.4). Rollback bundle kept as `dist.prev-0b7b512`. Record each release here. |
 | Service | `towems.service` → gunicorn, `toms.wsgi:application`, 2 workers, `127.0.0.1:8001`, `EnvironmentFile=/var/www/towems/.env`, **`WorkingDirectory=/var/www/towems/toms_backend`** |
 | Web server | nginx site `mrm`: TLS via `/etc/letsencrypt/live/mrm-system.online`, SPA root + `try_files`, `/api/` → `8001`, `/static/ /uploads/ /signatures/ /approved_pdfs/` aliased to `/var/www/mrm/*` (the app's `PROJECT_ROOT` symlinks point there, so legacy evidence files stay reachable) |
