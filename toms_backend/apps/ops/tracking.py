@@ -434,7 +434,9 @@ def _lead_notification(run, mission, actor):
         actor=actor,
         requires_action=True,
         action_label="Open convoy board",
-        action_url=f"/missions/{mission.id}/track/driver",
+        # The lead designation opens maximised: the map is the working screen a
+        # convoy lead needs, not a page to hunt for.
+        action_url=f"/missions/{mission.id}/track/driver?fullscreen=1",
         due_at=run.etd,
     )
 

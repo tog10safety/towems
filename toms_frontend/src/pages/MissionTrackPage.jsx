@@ -282,8 +282,9 @@ export default function MissionTrackPage() {
           )}
           {/* Only the person designated as a driver on this mission gets the
               driver screen. The Operations Center monitors from the map and the
-              movement log, so it is never offered a driver's controls. */}
-          {myRuns.length > 0 && (
+              movement log, so it is never offered a driver's controls. Once the
+              mission is complete the driver keeps only the movement log. */}
+          {myRuns.length > 0 && data.status !== "completed" && (
             <Link className="btn btn-ghost btn-md" to={`/missions/${data.id}/track/driver`}>
               Driver view
             </Link>

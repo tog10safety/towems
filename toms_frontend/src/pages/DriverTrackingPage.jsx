@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { divIcon } from "leaflet";
 import { MapContainer, Marker, Polyline, Popup, Tooltip, useMap } from "react-leaflet";
 import { API_BASE, api } from "../api/client.js";
 import { useAuth } from "../auth/AuthContext.jsx";
-import { Button, ErrorBanner, Loading, StatusBadge } from "../components/ui.jsx";
+import { Button, Card, ErrorBanner, Loading, StatusBadge } from "../components/ui.jsx";
+import PdfViewer from "../components/PdfViewer.jsx";
 import BasemapControl from "../components/map/BasemapControl.jsx";
 import MapBasemapLayer from "../components/map/MapBasemapLayer.jsx";
 import Icon from "../components/Icon.jsx";
@@ -446,10 +447,43 @@ function StopTimeline({ stops, supersededIds }) {
   );
 }
 
+/**
+ * A closed mission has no driving controls left. Keep the driver's record
+ * available, and nothing else: the movement log is the whole screen here.
+ */
+function CompletedDriverView({ mission }) {
+  return (
+    <div className="driver-app driver-complete">
+      <header className="driver-bar">
+        <div className="driver-bar-copy">
+          <strong>{mission.mission_number}</strong>
+          <span>
+            {mission.title} · <StatusBadge status={mission.status} />
+          </span>
+        </div>
+      </header>
+
+      <Card title="Movement log" className="driver-log-card">
+        <p className="hint">
+          This mission is complete. The driver view is closed; the movement log
+          remains available to you.
+        </p>
+        <PdfViewer
+          path={`/missions/${mission.id}/tracking/log/`}
+          title={`Movement log ${mission.mission_number}`}
+        />
+      </Card>
+    </div>
+  );
+}
+
 export default function DriverTrackingPage() {
   const { id } = useParams();
   const { user } = useAuth();
   const { resolvedTheme } = useTheme();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const wantsFullScreen = searchParams.get("fullscreen") === "1";
   const { data, loading, error, reload, setData } = useApi(`/missions/${id}/tracking/`, {
     deps: [id],
   });
@@ -473,7 +507,7 @@ export default function DriverTrackingPage() {
     readStored(WAKE_STORAGE_KEY, true) !== false
   );
   const [screenAwake, setScreenAwake] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(wantsFullScreen);
   const [sheetOpen, setSheetOpen] = useState(true);
   const [focusToken, setFocusToken] = useState(0);
   const [basemapId, setBasemapId] = useState(() =>
@@ -496,6 +530,7 @@ export default function DriverTrackingPage() {
 
   const runs = data?.runs ?? [];
   const delays = data?.delays ?? [];
+  const missionCompleted = data?.mission?.status === "completed";
   const canRecordOthers = Boolean(data?.can_manage || data?.is_lead);
   const myRuns = useMemo(
     () => runs.filter((run) => run.driver && String(run.driver) === String(user?.id)),
@@ -584,6 +619,25 @@ export default function DriverTrackingPage() {
   useEffect(() => {
     activeRunRef.current = activeRunId;
   }, [activeRunId]);
+
+  // A lead notification opens this page with fullscreen=1. Re-apply it on a
+  // fresh navigation to the same route, so a second lead alert still takes the
+  // driver straight to the maximised map.
+  useEffect(() => {
+    if (wantsFullScreen) setExpanded(true);
+  }, [wantsFullScreen, location.key]);
+
+  // A closed mission has no GPS stream or emergency control left. Drop any
+  // unsent breadcrumbs instead of retrying them against a closed run.
+  useEffect(() => {
+    if (!missionCompleted) return;
+    setStreaming(false);
+    setSosOpen(false);
+    queue.current = [];
+    queueRun.current = null;
+    setQueued(0);
+    writeStoredQueue(id, null, []);
+  }, [missionCompleted, id]);
 
   // Another operator may open or close a run, or record a milestone, while this
   // phone has the page open, so the driver's picture is refreshed too.
@@ -858,6 +912,9 @@ export default function DriverTrackingPage() {
   }
 
   const mission = data.mission;
+  if (mission.status === "completed") {
+    return <CompletedDriverView mission={mission} />;
+  }
   const abort = data.abort;
   // After an abort the pinned point is the only stop that still matters. This
   // run's own copy of it is matched by the name and coordinates the order set,

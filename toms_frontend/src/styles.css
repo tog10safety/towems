@@ -4564,6 +4564,11 @@ body.map-fullscreen-open {
   gap: 12px;
 }
 
+.driver-complete {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
 .driver-bar {
   display: flex;
   align-items: center;

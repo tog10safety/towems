@@ -447,7 +447,7 @@ def test_dispatch_opens_a_movement_run_and_notifies_the_driver(
         recipient=creator, category="movement", requires_action=True
     ).first()
     assert note is not None
-    assert note.action_url == f"/missions/{data['id']}/track/driver"
+    assert note.action_url == f"/missions/{data['id']}/track/driver?fullscreen=1"
 
 
 def test_patching_status_to_active_cannot_bypass_the_gate(as_user, planner, unit):

@@ -152,7 +152,10 @@ def test_starting_tracking_notifies_the_driver(as_user, planner, driver, tracked
 
     note = Notification.objects.get(recipient=driver, category="movement")
     assert note.requires_action is True
-    assert note.action_url == f"/missions/{mission.id}/track/driver"
+    # The only vehicle is the lead, so this is the lead designation. Opening
+    # it must take the driver straight to the maximised driving screen.
+    assert note.title.startswith("Convoy lead")
+    assert note.action_url == f"/missions/{mission.id}/track/driver?fullscreen=1"
 
 
 def test_the_driver_confirms_the_actual_departure(
