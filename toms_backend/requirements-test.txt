@@ -1,0 +1,7 @@
+# Backend test and CI dependencies.
+#
+# PyMuPDF supplies the ``fitz`` module used by the PDF assertions in
+# apps/ops/tests/test_air_flight_operations.py. It is not needed by the running
+# service, so it stays out of requirements.txt.
+-r requirements.txt
+PyMuPDF==1.24.14
