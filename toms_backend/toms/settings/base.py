@@ -96,6 +96,7 @@ INSTALLED_APPS = [
     "apps.ops",
     "apps.command",
     "apps.messaging",
+    "apps.armory",
 ]
 
 MIDDLEWARE = [

@@ -466,6 +466,16 @@ export function StatusBadge({ status }) {
     unserviceable: "danger",
     serviceable: "success",
     condemned: "danger",
+    // Armory transaction and stock states. "Open" means firearms are still
+    // outside the armory, so it reads as an outstanding action, not a closed
+    // record.
+    open: "warning",
+    closed: "success",
+    stored: "success",
+    issued: "warning",
+    retired: "muted",
+    quarantined: "warning",
+    expired: "danger",
   };
   const label = String(status ?? "").replace(/_/g, " ");
   return <Badge tone={map[status] ?? "muted"}>{label || "—"}</Badge>;

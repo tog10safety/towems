@@ -36,8 +36,6 @@ const CLASSES = [
   { value: "materiel", label: "Materiel" },
   { value: "equipment", label: "Equipment" },
   { value: "age", label: "Aerospace Ground Equipment (AGE)" },
-  { value: "firearms", label: "Firearms" },
-  { value: "ammunition", label: "Ammunition" },
   { value: "fuel", label: "Fuel & Lubricants" },
   { value: "communications", label: "Communications Equipment" },
   { value: "other", label: "Other authorised assets" },
@@ -48,9 +46,10 @@ const CLASS_LABEL = Object.fromEntries(CLASSES.map((entry) => [entry.value, entr
 /**
  * The sections the register is split into, in the order a store is walked.
  *
- * A tab is the shelf an officer works in, not a raw category: the Armory holds
- * firearms and ammunition, and POL is the fuel store. ``kinds`` is therefore a
- * list, and the register asks the server for all of them at once.
+ * A tab is the shelf an officer works in, not a raw category: POL is the fuel
+ * store and the general shelves are grouped by class. ``kinds`` is therefore a
+ * list, and the register asks the server for all of them at once. Firearms and
+ * ammunition have their own register under Armory Management.
  */
 /**
  * The grades the two graded POL categories are stocked in: POL-01 Aviation Fuel
@@ -83,16 +82,25 @@ const POL_GRADES = {
   ],
 };
 
+// Firearms and ammunition have moved to Armory Management. Listing the
+// remaining shelves explicitly keeps the general store from showing armory
+// rows through the unfiltered "all stock" request.
+const GENERAL_STOCK_KINDS = [
+  "materiel",
+  "equipment",
+  "age",
+  "fuel",
+  "communications",
+  "other",
+];
+
 const TABS = [
-  { value: "", label: "All stock", kinds: [] },
+  { value: "", label: "All stock", kinds: GENERAL_STOCK_KINDS },
   { value: "materiel", label: "Materiel", kinds: ["materiel"] },
   { value: "equipment", label: "Equipment", kinds: ["equipment"] },
   { value: "age", label: "AGE", kinds: ["age"] },
-  {
-    value: "armory",
-    label: "Armory (Firearms & Ammunition)",
-    kinds: ["firearms", "ammunition"],
-  },
+  // Firearms and ammunition are no longer stock shelves: they are maintained
+  // in the dedicated Armory Management register.
   { value: "communications", label: "Communications", kinds: ["communications"] },
   {
     value: "fuel",
@@ -298,7 +306,7 @@ export default function InventoryPage() {
   );
   const maxClassItems = Math.max(1, ...byClass.map((entry) => entry.items || 0));
 
-  /** A tab's figure is the sum of its kinds, so the Armory counts both. */
+  /** A tab's figure is the sum of its kinds. */
   function tabCount(entry) {
     if (!entry.kinds.length) return totals.items ?? 0;
     return entry.kinds.reduce((total, kind) => total + (classCounts[kind]?.items || 0), 0);
@@ -491,9 +499,9 @@ export default function InventoryPage() {
         <div>
           <h1>Inventory &amp; Logistics</h1>
           <p>
-            Materiel, equipment, aerospace ground equipment, firearms and ammunition, with their
-            condition and full transaction ledger. Air and mobility assets are managed in their
-            own Resource pages.
+            Materiel, equipment, aerospace ground equipment and POL, with their condition and
+            full transaction ledger. Firearms and ammunition are maintained separately in
+            Armory Management; air and mobility assets have their own Resource pages.
           </p>
         </div>
         {isAdmin && (
@@ -577,7 +585,7 @@ export default function InventoryPage() {
           label="Line items"
           value={number(summary.items ?? 0)}
           hint={`${number(summary.controlled ?? 0)} controlled · ${
-            summary.can_view_sensitive ? "firearms and ammunition included" : "controlled stores hidden"
+            summary.can_view_sensitive ? "controlled stores included" : "controlled stores hidden"
           }`}
         />
         <Stat
@@ -1515,7 +1523,7 @@ export default function InventoryPage() {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Controlled?" hint="Firearms and ammunition are controlled by default.">
+                <Field label="Controlled?" hint="Controlled stores are restricted to authorised logistics, command and safety roles.">
                   <Select
                     value={categoryForm.is_sensitive ? "yes" : "no"}
                     onChange={(event) =>

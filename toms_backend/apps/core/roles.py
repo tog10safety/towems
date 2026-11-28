@@ -188,6 +188,10 @@ CAPABILITY_LABELS = {
     "manage_missions": "Manage missions",
     "approve_missions": "Give the final mission decision",
     "manage_inventory": "Manage inventory",
+    "view_armory": "View armory inventory and transactions",
+    "manage_armory_inventory": "Manage firearms, ammunition and personnel assignments",
+    "process_armory_transactions": "Issue and receive firearms and ammunition",
+    "view_own_armory": "View own designated firearms and acknowledgements",
     "record_air_fuel": "Record aircraft fuel consumption",
     "manage_vehicles": "Manage the vehicle register",
     "request_inventory": "Request inventory changes",
@@ -235,6 +239,13 @@ CAP_MANAGE_PERSONNEL = "manage_personnel"
 CAP_MANAGE_MISSIONS = "manage_missions"
 CAP_APPROVE_MISSIONS = "approve_missions"
 CAP_MANAGE_INVENTORY = "manage_inventory"
+#: Armory access. The armory is a controlled register inside the Resources
+#: area: Logistics maintains it, command and safety read it, and every person
+#: may read their own designation without seeing the wider register.
+CAP_VIEW_ARMORY = "view_armory"
+CAP_MANAGE_ARMORY = "manage_armory_inventory"
+CAP_PROCESS_ARMORY = "process_armory_transactions"
+CAP_VIEW_OWN_ARMORY = "view_own_armory"
 #: Recording the POL-01 an airframe burned on an itinerary leg. The Logistics
 #: Officer, the Logistic NCOIC and the Operations Center hold it.
 CAP_RECORD_AIR_FUEL = "record_air_fuel"
@@ -318,6 +329,10 @@ ALL_CAPABILITIES = frozenset(
         CAP_MANAGE_MISSIONS,
         CAP_APPROVE_MISSIONS,
         CAP_MANAGE_INVENTORY,
+        CAP_VIEW_ARMORY,
+        CAP_MANAGE_ARMORY,
+        CAP_PROCESS_ARMORY,
+        CAP_VIEW_OWN_ARMORY,
         CAP_RECORD_AIR_FUEL,
         CAP_MANAGE_VEHICLES,
         CAP_REQUEST_INVENTORY,
@@ -364,6 +379,10 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAP_VIEW_SUBORDINATES,
             CAP_MONITOR_VEHICLE_TRACKING,
             CAP_MANAGE_ACTING,
+            # Command reads the unit's armory for accountability but does not
+            # encode inventory or release weapons; the signed Mission Order is
+            # the approving authority for an issue.
+            CAP_VIEW_ARMORY,
             # Command reads its unit's hazard library; changing it is the
             # Safety Officer's job.
             CAP_VIEW_HAZARDS,
@@ -383,6 +402,7 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAP_VIEW_ANALYTICS,
             CAP_VIEW_SUBORDINATES,
             CAP_MONITOR_VEHICLE_TRACKING,
+            CAP_VIEW_ARMORY,
             CAP_VIEW_HAZARDS,
         }
     ),
@@ -395,6 +415,7 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAP_VIEW_ANALYTICS,
             CAP_VIEW_SUBORDINATES,
             CAP_MONITOR_VEHICLE_TRACKING,
+            CAP_VIEW_ARMORY,
             CAP_VIEW_HAZARDS,
         }
     ),
@@ -446,6 +467,9 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             # Inventory is the Logistics Officer's register: safety keeps
             # read access (including controlled items) but no write rights.
             CAP_VIEW_SENSITIVE_INVENTORY,
+            # The armory is read-only for safety: the Unit Safety Office audits
+            # custody, inspections and transactions but never releases stock.
+            CAP_VIEW_ARMORY,
             CAP_VIEW_ANALYTICS,
             CAP_VIEW_SUBORDINATES,
             CAP_MONITOR_VEHICLE_TRACKING,
@@ -465,6 +489,11 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAP_REJECT,
             CAP_RETURN,
             CAP_MANAGE_INVENTORY,
+            # The Logistics Officer owns armory accountability and may encode,
+            # assign, issue and receive.
+            CAP_VIEW_ARMORY,
+            CAP_MANAGE_ARMORY,
+            CAP_PROCESS_ARMORY,
             CAP_RECORD_AIR_FUEL,
             CAP_MANAGE_VEHICLES,
             CAP_VIEW_SENSITIVE_INVENTORY,
@@ -476,6 +505,11 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
         {
             CAP_VIEW,
             CAP_REQUEST_INVENTORY,
+            # The Logistic NCOIC is the armorer: inventory encoding, personnel
+            # assignment, physical inspection, issue and return processing.
+            CAP_VIEW_ARMORY,
+            CAP_MANAGE_ARMORY,
+            CAP_PROCESS_ARMORY,
             # The NCOIC records the fuel figure the crew confirms at shutdown.
             CAP_RECORD_AIR_FUEL,
             CAP_COMMENT,
@@ -553,6 +587,13 @@ for _staff_role in (
         CAP_ISSUE_INSTRUCTIONS,
     }
 del _staff_role
+
+# Every account is also a person on the roster, so every role can read its
+# own designated firearms and its own issue/return acknowledgement history.
+# This grant opens no register: it is scoped to the caller's own user row.
+for _role in ROLE_CAPABILITIES:
+    ROLE_CAPABILITIES[_role] = ROLE_CAPABILITIES[_role] | {CAP_VIEW_OWN_ARMORY}
+del _role
 
 #: An Evaluator is an MRM account, not a staff post: on its own it does not open
 #: the resource registers. Issuing instructions is unchanged for Evaluators.
@@ -955,6 +996,10 @@ def permissions_payload(user) -> dict:
         "is_system_owner": is_owner,
         "can_manage_personnel": CAP_MANAGE_PERSONNEL in caps,
         "can_manage_inventory": CAP_MANAGE_INVENTORY in caps,
+        "can_view_armory": CAP_VIEW_ARMORY in caps,
+        "can_manage_armory": CAP_MANAGE_ARMORY in caps,
+        "can_process_armory": CAP_PROCESS_ARMORY in caps,
+        "can_view_own_armory": CAP_VIEW_OWN_ARMORY in caps,
         "can_record_air_fuel": CAP_RECORD_AIR_FUEL in caps,
         "can_manage_vehicles": CAP_MANAGE_VEHICLES in caps,
         "can_view_sensitive_inventory": CAP_VIEW_SENSITIVE_INVENTORY in caps,

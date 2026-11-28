@@ -9,6 +9,7 @@ import { Loading } from "./components/ui.jsx";
 // the login chunk delayed first paint for everyone.
 const AORPage = lazy(() => import("./pages/AORPage.jsx"));
 const AirAssetsPage = lazy(() => import("./pages/AirAssetsPage.jsx"));
+const ArmoryPage = lazy(() => import("./pages/ArmoryPage.jsx"));
 const AuditPage = lazy(() => import("./pages/AuditPage.jsx"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage.jsx"));
 const DriverTrackingPage = lazy(() => import("./pages/DriverTrackingPage.jsx"));
@@ -123,6 +124,10 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        {/* The armory is its own controlled register. Everyone may see their own
+            designation; the server refuses the wider register without the
+            view_armory capability. */}
+        <Route path="armory" element={<ArmoryPage />} />
         <Route
           path="air-assets"
           element={

@@ -7,11 +7,17 @@
  * open: the query matches the visible label (rank/name and serial number), the
  * arrow keys move through the matches, Enter chooses, Escape closes.
  *
+ * Pass `search` to look the options up on the server instead of filtering the
+ * `options` array locally. The function receives the trimmed query and resolves
+ * to `{ value, label, hint }` rows; it is debounced while the list is open so
+ * typing one name is one request.
+ *
  * Options are `{ value, label, hint }`. The parent owns the value so a cleared
- * selection is a real unassignment, not a hidden stale id.
+ * selection is a real unassignment, not a hidden stale id. `selectedOption`
+ * lets a form show its saved value before the remote lookup has run.
  */
 
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 function matches(option, query) {
   if (!query) return true;
@@ -24,6 +30,9 @@ export default function SearchableSelect({
   value,
   onChange,
   options = [],
+  search,
+  selectedOption = null,
+  onSelectOption,
   placeholder = "Search name or serial…",
   disabled = false,
   error = false,
@@ -33,13 +42,58 @@ export default function SearchableSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [remoteOptions, setRemoteOptions] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [picked, setPicked] = useState(null);
   const inputRef = useRef(null);
+  const requestId = useRef(0);
   const listId = useId();
+  const remote = typeof search === "function";
 
-  const selected = options.find((option) => String(option.value) === String(value));
+  useEffect(() => {
+    if (!value) setPicked(null);
+  }, [value]);
+
+  useEffect(() => {
+    if (!remote || !open) return undefined;
+    const id = ++requestId.current;
+    const trimmed = query.trim();
+    setSearching(true);
+    setSearchError("");
+    const timer = setTimeout(
+      async () => {
+        try {
+          const rows = await search(trimmed);
+          if (id === requestId.current) setRemoteOptions(rows ?? []);
+        } catch {
+          if (id === requestId.current) {
+            setRemoteOptions([]);
+            setSearchError("Unable to search personnel. Keep typing to retry.");
+          }
+        } finally {
+          if (id === requestId.current) setSearching(false);
+        }
+      },
+      trimmed ? 250 : 0
+    );
+    return () => {
+      clearTimeout(timer);
+      if (requestId.current === id) requestId.current += 1;
+    };
+  }, [remote, search, open, query]);
+
+  const candidates = remote ? remoteOptions : options;
+  const selected =
+    candidates.find((option) => String(option.value) === String(value)) ||
+    options.find((option) => String(option.value) === String(value)) ||
+    (picked && String(picked.value) === String(value) ? picked : null) ||
+    (selectedOption && String(selectedOption.value) === String(value)
+      ? selectedOption
+      : null);
   const filtered = useMemo(
-    () => options.filter((option) => matches(option, query)),
-    [options, query]
+    () => (remote ? candidates : candidates.filter((option) => matches(option, query))),
+    [remote, candidates, query]
   );
   const activeIndex = Math.min(active, Math.max(0, filtered.length - 1));
   const shown = open ? query : selected?.label ?? "";
@@ -53,6 +107,8 @@ export default function SearchableSelect({
 
   function choose(option) {
     onChange(String(option.value));
+    setPicked(option);
+    onSelectOption?.(option);
     setQuery("");
     setOpen(false);
     inputRef.current?.blur();
@@ -60,6 +116,8 @@ export default function SearchableSelect({
 
   function clear() {
     onChange("");
+    setPicked(null);
+    onSelectOption?.(null);
     setQuery("");
     setOpen(false);
   }
@@ -127,9 +185,18 @@ export default function SearchableSelect({
       )}
 
       {open && (
-        <div className="searchable-menu" id={listId} role="listbox">
-          {filtered.length === 0 ? (
-            <p className="searchable-empty">{emptyMessage}</p>
+        <div
+          className="searchable-menu"
+          id={listId}
+          role="listbox"
+          aria-busy={searching || undefined}
+        >
+          {searchError ? (
+            <p className="searchable-empty">{searchError}</p>
+          ) : filtered.length === 0 ? (
+            <p className="searchable-empty">
+              {searching ? "Searching…" : emptyMessage}
+            </p>
           ) : (
             filtered.map((option, index) => (
               <button

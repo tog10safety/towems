@@ -87,6 +87,16 @@ const NAV_GROUPS = [
         icon: "inventory",
         capability: "view_resources",
       },
+      // Firearms and ammunition live in their own controlled register, not in
+      // the general store. Every account can open it to read its own
+      // designation; the page and the API hide the unit register from anyone
+      // without the armory capabilities.
+      {
+        to: "/armory",
+        label: "Armory Management",
+        icon: "armory",
+        capability: "view_own_armory",
+      },
       {
         to: "/air-assets",
         label: "Air Assets",

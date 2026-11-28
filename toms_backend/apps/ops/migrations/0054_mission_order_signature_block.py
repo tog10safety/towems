@@ -97,6 +97,10 @@ def record_signed_blocks(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("ops", "0053_pov_plate_as_identifier"),
+        # This migration reads command.UnitAppointment. Without an explicit
+        # edge the executor is free to apply it before the command app exists
+        # on a fresh database (the armory app exposes that ordering).
+        ("command", "0001_initial"),
     ]
 
     operations = [

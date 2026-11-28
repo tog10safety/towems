@@ -81,6 +81,14 @@ const PATHS = {
       <path d="m3 8.5 9 5.5 9-5.5M12 14v7" />
     </>
   ),
+  // Armory: two secured rifles over the store they are kept in.
+  armory: (
+    <>
+      <path d="M4 9.5 12 5l8 4.5v5L12 19l-8-4.5v-5Z" />
+      <path d="m8 6.5 8 11M16 6.5l-8 11" />
+      <path d="M6 20h12" />
+    </>
+  ),
   aircraft: (
     <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2.5 1.3V22l4-1 4 1v-1.7L13 19v-5.5l8 2.5Z" />
   ),
