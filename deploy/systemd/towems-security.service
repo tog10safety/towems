@@ -1,0 +1,21 @@
+[Unit]
+Description=TOWEMS automatic account deactivation scan
+Documentation=file:///var/www/towems/docs/DEPLOYMENT_AND_ROLLBACK.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/towems/toms_backend
+EnvironmentFile=/var/www/towems/.env
+ExecStart=/var/www/towems/venv/bin/python manage.py deactivate_inactive_accounts
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=15min
+SyslogIdentifier=towems-security

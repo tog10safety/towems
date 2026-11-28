@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily TOWEMS account inactivity scan
+Requires=towems-security.service
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=towems-security.service
+
+[Install]
+WantedBy=timers.target

@@ -9,7 +9,7 @@ import secrets
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth import update_session_auth_hash
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -26,7 +26,9 @@ from apps.accounts import (
     device_sessions,
     device_tokens,
     mfa,
+    mobile_auth,
     ownership,
+    security,
     setup_gate,
     unit_changes,
 )
@@ -34,6 +36,7 @@ from apps.accounts.models import (
     AUTHORITY_CHOICES,
     CATEGORY_CHOICES,
     DeviceToken,
+    MobileDevice,
     PasswordResetToken,
     UnitChangeRequest,
     User,
@@ -47,6 +50,9 @@ from apps.accounts.serializers import (
     LoginSerializer,
     MFACodeSerializer,
     MFAChallengeSerializer,
+    MobileDeviceSerializer,
+    MobileEnrollSerializer,
+    MobileRefreshSerializer,
     PasswordResetCompleteSerializer,
     PersonnelWriteSerializer,
     UnitChangeRequestSerializer,
@@ -201,6 +207,8 @@ def _complete_login(
     """
     login(request, user)
     session = request.session
+    security.mark_session_started(session)
+    security.record_authenticated_activity(user)
     # A Creator account may hold one session at a time. The check is made after
     # ``login`` so the key of *this* session is excluded from the comparison, and
     # the session is flushed again if another device already holds one.
@@ -266,6 +274,16 @@ class LoginView(APIView):
             password=serializer.validated_data["password"],
         )
         if user is None:
+            # Record the attempt without the submitted password or any hint
+            # about whether the username exists.
+            log_action(
+                actor=None,
+                action="login_failed",
+                entity_type="auth",
+                entity_id=serializer.validated_data["username"][:150],
+                note="Password sign-in failed",
+                request=request,
+            )
             return Response(
                 {"detail": "Invalid username or password.", "errors": {}},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -326,6 +344,14 @@ class MFAChallengeView(APIView):
         if not mfa.verify_login_code(
             state, serializer.validated_data["code"], recovery=recovery
         ):
+            log_action(
+                actor=user,
+                action="login_failed",
+                entity_type="auth",
+                entity_id=user.id,
+                note="Authenticator or recovery code rejected",
+                request=request,
+            )
             return Response(
                 {
                     "detail": (
@@ -421,6 +447,25 @@ class LogoutView(APIView):
 
     def post(self, request):
         user = request.user
+        # A mobile-aware logout must end the refresh chain named by the bearer
+        # token, not just the WebView's Django session. The header is parsed
+        # explicitly because SessionAuthentication may win when both a cookie
+        # and the Authorization header are present.
+        from rest_framework.authentication import get_authorization_header
+        from rest_framework_simplejwt.tokens import AccessToken
+
+        parts = get_authorization_header(request).split()
+        if len(parts) == 2 and parts[0].lower() == b"bearer":
+            try:
+                access = AccessToken(parts[1].decode("ascii"))
+            except Exception:
+                access = None
+            if access is not None and access.get("typ") == "mobile":
+                mobile_auth.revoke_session(
+                    access.get("msid"),
+                    reason="Signed out from Android",
+                    request=request,
+                )
         log_action(
             actor=user, action="logout", entity_type="auth", entity_id=user.id, request=request
         )
@@ -566,6 +611,87 @@ class DeviceTokenView(APIView):
             {"token": raw, "expires_at": row.expires_at, "label": row.label},
             status=status.HTTP_201_CREATED,
         )
+
+
+class MobileEnrollView(APIView):
+    """Exchange the live, MFA-verified WebView session for a mobile chain.
+
+    Session authentication is required and a mobile access token is deliberately
+    not accepted here: biometric login may only begin after a complete password
+    plus authenticator sign-in.
+    """
+
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [SessionAuthentication]
+    throttle_scope = "login"
+
+    def post(self, request):
+        enforce_csrf(request)
+        if not request.session.get("mfa_verified", False):
+            return Response(
+                {
+                    "detail": "Complete the authenticator step before enabling biometric login.",
+                    "errors": {},
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if setup_gate.profile_gaps(request.user) or setup_gate.mfa_outstanding(request.user):
+            return Response(
+                {
+                    "detail": "Finish the first-sign-in setup before enabling biometric login.",
+                    "errors": {},
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = MobileEnrollSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            payload = mobile_auth.enroll(
+                request.user,
+                device_id=data["device_id"],
+                label=data.get("label") or "Android device",
+                platform=data.get("platform") or "android",
+                app_version=data.get("app_version") or "",
+                session_key=request.session.session_key or "",
+                request=request,
+            )
+        except mobile_auth.MobileAuthError as exc:
+            return Response(
+                {"detail": str(exc), "errors": {}}, status=status.HTTP_403_FORBIDDEN
+            )
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class MobileRefreshView(APIView):
+    """Rotate an opaque Android refresh token and return a new access token."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    throttle_scope = "login"
+
+    def post(self, request):
+        serializer = MobileRefreshSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            payload = mobile_auth.refresh(
+                data["refresh_token"],
+                device_id=data["device_id"],
+                request=request,
+            )
+        except mobile_auth.DeviceRevoked as exc:
+            return Response(
+                {"detail": str(exc), "code": "device_revoked", "errors": {}},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        except mobile_auth.MobileAuthError as exc:
+            return Response(
+                {"detail": str(exc), "code": "reauth_required", "errors": {}},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        return Response(payload)
 
 
 class DevicePushTokenView(APIView):
@@ -759,6 +885,12 @@ class ChangePasswordView(APIView):
         # A new password means every credential derived from the old one goes:
         # the phone re-mints its alert token the next time it is opened.
         device_tokens.revoke_all(user)
+        mobile_auth.revoke_all(
+            user,
+            reason="Password changed",
+            request=request,
+            revoke_devices=False,
+        )
         setup_gate.sync_session(user, getattr(request, "session", None))
         log_action(
             actor=user,
@@ -848,6 +980,12 @@ class PasswordResetView(APIView):
         # read-only token is not session-bound in the request path, so end it
         # here as well.
         device_tokens.revoke_all(user)
+        mobile_auth.revoke_all(
+            user,
+            reason="Password reset completed",
+            request=request,
+            revoke_devices=False,
+        )
 
         log_action(
             actor=user,
@@ -1163,17 +1301,8 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
                 {"detail": "The last active Administrator cannot be deactivated."}
             )
 
-        target.is_active = False
-        target.save(update_fields=["is_active"])
-        log_action(
-            actor=request.user,
-            action="deactivate_user",
-            entity_type="user",
-            entity_id=target.id,
-            before={"is_active": True},
-            after={"is_active": False},
-            note=reason,
-            request=request,
+        security.deactivate_account(
+            target, actor=request.user, reason=reason, request=request
         )
         record_activity(
             user=request.user,
@@ -1198,6 +1327,9 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
 
         target.is_active = True
         target.save(update_fields=["is_active"])
+        # The inactivity command must not deactivate the account again on its
+        # next run because its old last-activity stamp is still 30+ days old.
+        security.record_authenticated_activity(target)
         log_action(
             actor=request.user,
             action="reactivate_user",
@@ -1330,6 +1462,65 @@ class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(
             AdminUserSerializer(target, context={"request": request}).data
         )
+
+
+class MobileDeviceViewSet(viewsets.ReadOnlyModelViewSet):
+    """Administrator register of Android installs and their token chains.
+
+    Revocation is immediate: the next access-token request checks the session
+    row, and the refresh endpoint refuses the install. Reactivation only
+    authorises the install; the user must still sign in with password + MFA to
+    create a fresh chain.
+    """
+
+    permission_classes = [IsAuthenticated, IsUserAdministrator]
+    serializer_class = MobileDeviceSerializer
+    http_method_names = ["get", "post", "head", "options"]
+    filterset_fields = ["is_authorized", "user", "platform"]
+    search_fields = [
+        "user__username",
+        "user__first_name",
+        "user__last_name",
+        "user__serial_number",
+        "device_id",
+        "label",
+    ]
+    ordering_fields = ["last_seen_at", "created_at", "user__last_name"]
+    ordering = ["-last_seen_at", "-id"]
+
+    def get_queryset(self):
+        return (
+            MobileDevice.objects.select_related("user", "user__unit")
+            .annotate(
+                active_sessions=Count(
+                    "sessions",
+                    filter=Q(sessions__revoked_at__isnull=True),
+                    distinct=True,
+                )
+            )
+        )
+
+    @action(detail=True, methods=["post"])
+    def authorize(self, request, pk=None):
+        enforce_csrf(request)
+        device = mobile_auth.authorize_device(
+            self.get_object(), actor=request.user, request=request
+        )
+        device = self.get_queryset().get(pk=device.pk)
+        return Response(self.get_serializer(device).data)
+
+    @action(detail=True, methods=["post"])
+    def revoke(self, request, pk=None):
+        enforce_csrf(request)
+        device = self.get_object()
+        reason = (request.data.get("reason") or "").strip()
+        if len(reason) < 3:
+            raise ValidationError({"reason": "Record why this device is being revoked."})
+        mobile_auth.revoke_device(
+            device, actor=request.user, reason=reason, request=request
+        )
+        device = self.get_queryset().get(pk=device.pk)
+        return Response(self.get_serializer(device).data)
 
 
 class PersonnelViewSet(viewsets.ModelViewSet):

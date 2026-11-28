@@ -109,6 +109,12 @@ const NAV_GROUPS = [
       { to: "/audit", label: "Audit Trail", icon: "audit", permission: "view_audit_log" },
       { to: "/admin/users", label: "User Management", icon: "users", permission: "manage_users" },
       {
+        to: "/admin/mobile-devices",
+        label: "Android Devices",
+        icon: "shield",
+        permission: "manage_users",
+      },
+      {
         to: "/admin/unit-changes",
         label: "Unit Change Requests",
         icon: "users",

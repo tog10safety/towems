@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # .../toms_backend
@@ -106,8 +107,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    # Stamps each signed-in account's last activity (dashboard presence rail).
+    # Enforces the 30-minute idle and 30-day absolute web session limits.
     # It needs the session user, so it follows AuthenticationMiddleware.
+    "apps.accounts.security.SessionSecurityMiddleware",
+    # Stamps each signed-in account's last activity (dashboard presence rail).
     "apps.accounts.presence.PresenceMiddleware",
     # An expired MFA grace window leaves a setup-only session. Only sessions
     # flagged by LoginView are restricted; token clients are untouched.
@@ -193,7 +196,16 @@ SESSION_COOKIE_NAME = "toms_session"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
-SESSION_COOKIE_AGE = int(env("TOMS_SESSION_AGE", "3600"))
+SESSION_COOKIE_AGE = int(env("TOMS_SESSION_AGE", "1800"))
+# The security middleware writes ``auth_last_activity`` on every authenticated
+# request, so the cookie must be saved alongside it.
+SESSION_SAVE_EVERY_REQUEST = True
+#: Idle time before web and Android sessions must reauthenticate.
+SESSION_INACTIVITY_MINUTES = int(env("TOMS_SESSION_INACTIVITY_MINUTES", "30"))
+#: Absolute lifetime of a web or Android session, from first authentication.
+SESSION_MAX_DAYS = int(env("TOMS_SESSION_MAX_DAYS", "30"))
+#: Accounts with no authenticated activity for this many days are deactivated.
+ACCOUNT_INACTIVITY_DAYS = int(env("TOMS_ACCOUNT_INACTIVITY_DAYS", "30"))
 #: How long a phone's read-only alert token outlives its session. It is not a
 #: session: it only reads the notification pulse and the message count, and is
 #: revoked on sign-out, password change and expiry.
@@ -214,6 +226,9 @@ CORS_ALLOWED_ORIGINS = env_list(
     "DJANGO_CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 )
 CORS_ALLOW_CREDENTIALS = True
+# The SPA marks genuine user actions separately from background polling so an
+# idle session can expire while the notification rail keeps checking.
+CORS_ALLOW_HEADERS = (*default_headers, "x-towems-activity")
 
 # --------------------------------------------------------------------------
 # Content Security Policy (report-only rollout)
@@ -233,7 +248,9 @@ CSP_EXTRA_CONNECT_SRC = env_list("TOMS_CSP_EXTRA_CONNECT_SRC")
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # Checks the mobile session row on every request, so revocation is
+        # immediate rather than waiting for the 15-minute access token to age.
+        "apps.accounts.mobile_auth.MobileJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "apps.core.pagination.StandardPagination",
@@ -297,7 +314,7 @@ SPECTACULAR_SETTINGS = {
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": __import__("datetime").timedelta(
-        minutes=int(env("TOMS_JWT_ACCESS_MINUTES", "60"))
+        minutes=int(env("TOMS_JWT_ACCESS_MINUTES", "15"))
     ),
     "REFRESH_TOKEN_LIFETIME": __import__("datetime").timedelta(
         days=int(env("TOMS_JWT_REFRESH_DAYS", "7"))

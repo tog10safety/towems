@@ -43,10 +43,17 @@ MAX_ONLINE_ROWS = 40
 #: which only means a stamp can be written a little more often than once a
 #: minute - never less.
 _last_stamp: dict[int, float] = {}
+# A background poll may have updated last_seen seconds ago; that must not
+# suppress the first real user action from advancing the security clock.
+_last_security_stamp: dict[int, float] = {}
 
 
-def stamp_presence(user) -> None:
-    """Record that ``user`` just used the system, if the interval has passed."""
+def stamp_presence(user, *, security: bool = True) -> None:
+    """Record that ``user`` just used the system, if the interval has passed.
+
+    ``security=False`` is used for background polling: it keeps the online rail
+    fresh but deliberately does not extend the inactivity clock.
+    """
     try:
         user_id = int(user.pk)
     except (TypeError, ValueError):
@@ -54,18 +61,30 @@ def stamp_presence(user) -> None:
 
     now = time.monotonic()
     last = _last_stamp.get(user_id)
-    if last is not None and now - last < WRITE_INTERVAL_SECONDS:
+    last_security = _last_security_stamp.get(user_id)
+    security_due = security and (
+        last_security is None or now - last_security >= WRITE_INTERVAL_SECONDS
+    )
+    presence_due = last is None or now - last >= WRITE_INTERVAL_SECONDS
+    if not security_due and not presence_due:
         return
     _last_stamp[user_id] = now
+    if security_due:
+        _last_security_stamp[user_id] = now
 
     from apps.accounts.models import UserProfile
 
     try:
-        UserProfile.objects.update_or_create(
-            user_id=user_id, defaults={"last_seen": timeutils.now()}
-        )
+        now = timeutils.now()
+        defaults = {"last_seen": now}
+        if security_due:
+            # This is the authenticated-activity clock used by automatic
+            # deactivation, so ordinary web use keeps an account active.
+            defaults["security_last_active_at"] = now
+        UserProfile.objects.update_or_create(user_id=user_id, defaults=defaults)
     except Exception:  # presence must never fail a request
         _last_stamp.pop(user_id, None)
+        _last_security_stamp.pop(user_id, None)
         logger.warning("Could not record presence for user %s", user_id, exc_info=True)
 
 
@@ -83,7 +102,10 @@ class PresenceMiddleware:
     def __call__(self, request):
         user = getattr(request, "user", None)
         if user is not None and getattr(user, "is_authenticated", False):
-            stamp_presence(user)
+            stamp_presence(
+                user,
+                security=getattr(request, "towems_interactive", True),
+            )
         return self.get_response(request)
 
 
@@ -157,6 +179,11 @@ class OnlineNowView(APIView):
 
     def get(self, request):
         # Token/DRF-authenticated callers do not pass through the session
-        # middleware, so the first call also marks the caller as present.
-        stamp_presence(request.user)
+        # middleware, so the first call also marks the caller as present. The
+        # security clock only moves for a real interaction; the presence rail
+        # itself is a background poll.
+        stamp_presence(
+            request.user,
+            security=getattr(request, "towems_interactive", False),
+        )
         return Response(online_payload(request.user))

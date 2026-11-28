@@ -10,6 +10,7 @@ from rest_framework import serializers
 from apps.accounts.models import (
     AUTHORITY_CHOICES,
     CATEGORY_CHOICES,
+    MobileDevice,
     UnitChangeRequest,
     User,
     UserProfile,
@@ -899,3 +900,67 @@ class DeviceTokenRequestSerializer(serializers.Serializer):
     label = serializers.CharField(
         max_length=80, required=False, allow_blank=True, default=""
     )
+
+
+class MobileEnrollSerializer(serializers.Serializer):
+    """The Android install enrolling from a live, MFA-verified web session."""
+
+    device_id = serializers.RegexField(r"^[A-Za-z0-9_-]{8,64}$", max_length=64)
+    label = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default="Android device"
+    )
+    platform = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default="android"
+    )
+    app_version = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default=""
+    )
+
+
+class MobileRefreshSerializer(serializers.Serializer):
+    refresh_token = serializers.CharField(max_length=256, trim_whitespace=True)
+    device_id = serializers.RegexField(r"^[A-Za-z0-9_-]{8,64}$", max_length=64)
+
+
+class MobileDeviceSerializer(serializers.ModelSerializer):
+    """Administrator view of one registered Android install.
+
+    The refresh token is never represented here.  ``active_sessions`` is
+    annotated by the viewset so the list costs one query regardless of rows.
+    """
+
+    username = serializers.CharField(source="user.username", read_only=True)
+    full_name = serializers.CharField(source="user.get_full_name", read_only=True)
+    serial_number = serializers.CharField(source="user.serial_number", read_only=True)
+    unit_name = serializers.CharField(source="user.unit.name", read_only=True)
+    active_sessions = serializers.IntegerField(read_only=True)
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MobileDevice
+        fields = [
+            "id",
+            "user_id",
+            "username",
+            "full_name",
+            "serial_number",
+            "unit_name",
+            "device_id",
+            "label",
+            "platform",
+            "app_version",
+            "is_authorized",
+            "status",
+            "active_sessions",
+            "authorized_at",
+            "revoked_at",
+            "last_seen_at",
+            "created_at",
+        ]
+
+    def get_status(self, obj) -> str:
+        if not obj.is_authorized:
+            return "revoked"
+        if obj.active_sessions:
+            return "active"
+        return "authorized"

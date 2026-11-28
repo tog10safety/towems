@@ -15,6 +15,7 @@ import {
 import { useApi } from "../hooks/useApi.js";
 import { useTheme } from "../theme/ThemeContext.jsx";
 import { formatDateTime } from "../utils/format.js";
+import { isNativeShell } from "../auth/mobile.js";
 
 const OPTIONS = [
   {
@@ -230,6 +231,113 @@ function SignedInDevices() {
   );
 }
 
+function BiometricTestCard() {
+  const {
+    biometricAvailable,
+    biometricEnrolled,
+    biometricUsername,
+    autoLockEnabled,
+    setBiometricAutoLock,
+    activateBiometrics,
+    lockForBiometricTest,
+  } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [savingAutoLock, setSavingAutoLock] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  if (!isNativeShell()) return null;
+
+  async function activate() {
+    setBusy(true);
+    setActionError("");
+    const result = await activateBiometrics();
+    if (!result?.ok) {
+      setActionError(result?.message || "Unable to activate biometric sign-in.");
+    }
+    setBusy(false);
+  }
+
+  async function toggleAutoLock(event) {
+    const enabled = event.target.checked;
+    setSavingAutoLock(true);
+    setActionError("");
+    if (!setBiometricAutoLock(enabled)) {
+      setActionError("Unable to save the biometric lock setting.");
+    }
+    setSavingAutoLock(false);
+  }
+
+  async function lockNow() {
+    setBusy(true);
+    setActionError("");
+    const locked = await lockForBiometricTest();
+    if (!locked) {
+      setActionError(
+        "Biometric sign-in is not ready on this device. Sign in with your password and authenticator first."
+      );
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Biometric sign-in">
+      <p className="hint" style={{ marginBottom: 10 }}>
+        Your fingerprint or face unlocks the TOWEMS session stored securely on this
+        Android device. Closing or leaving the app locks the screen without signing
+        you out, so alerts and pushes keep arriving while it is locked.
+      </p>
+      {biometricEnrolled ? (
+        <>
+          <label className="check-row" style={{ marginBottom: 10 }}>
+            <input
+              type="checkbox"
+              checked={autoLockEnabled}
+              disabled={savingAutoLock || !biometricAvailable}
+              onChange={toggleAutoLock}
+            />
+            <span>Require fingerprint or face when TOWEMS opens</span>
+          </label>
+          <p className="hint" style={{ marginBottom: 14 }}>
+            {biometricUsername ? `Configured for @${biometricUsername}. ` : ""}
+            The server session stays active while locked; only the decrypted copy on
+            this phone is cleared.
+          </p>
+          <Button
+            type="button"
+            onClick={lockNow}
+            disabled={busy || !biometricAvailable}
+          >
+            <Icon name="shield" size={16} />
+            {busy ? "Locking…" : "Lock TOWEMS now"}
+          </Button>
+        </>
+      ) : (
+        <>
+          <p className="hint" style={{ marginBottom: 14 }}>
+            Not activated on this phone yet. This uses the signed-in session; your
+            password and authenticator code are not stored.
+          </p>
+          <Button
+            type="button"
+            onClick={activate}
+            disabled={busy || !biometricAvailable}
+          >
+            <Icon name="shield" size={16} />
+            {busy ? "Activating…" : "Activate biometric sign-in"}
+          </Button>
+        </>
+      )}
+      {!biometricAvailable && (
+        <p className="hint" style={{ marginTop: 10 }}>
+          Android reports no enrolled fingerprint or face. Add one in Android Settings
+          first.
+        </p>
+      )}
+      <ErrorBanner message={actionError} />
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const { theme, resolvedTheme, setTheme, error } = useTheme();
@@ -312,6 +420,8 @@ export default function SettingsPage() {
           })}
         </div>
       </Card>
+
+      <BiometricTestCard />
 
       <SignedInDevices />
 

@@ -6,7 +6,16 @@ import { Button, ErrorBanner, Field, Input } from "../components/ui.jsx";
 import { useTheme } from "../theme/ThemeContext.jsx";
 
 export default function LoginPage() {
-  const { user, login, verifyMfa, switchDevice } = useAuth();
+  const {
+    user,
+    login,
+    verifyMfa,
+    switchDevice,
+    loginWithBiometrics,
+    biometricAvailable,
+    biometricEnrolled,
+    biometricUsername: savedBiometricUsername,
+  } = useAuth();
   const { resolvedTheme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
@@ -19,6 +28,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   // Set when a single-device account is already signed in elsewhere.
   const [conflict, setConflict] = useState(null);
+  const [biometricBusy, setBiometricBusy] = useState(false);
 
   if (user) return <Navigate to={location.state?.from || "/"} replace />;
 
@@ -96,6 +106,23 @@ export default function LoginPage() {
       handleAuthError(err);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onBiometric() {
+    setBiometricBusy(true);
+    setError("");
+    try {
+      const result = await loginWithBiometrics();
+      if (result?.mfa_setup_required) {
+        navigate("/mfa-setup", { replace: true });
+        return;
+      }
+      navigate(destination, { replace: true });
+    } catch (err) {
+      setError(err.message || "Biometric sign-in failed.");
+    } finally {
+      setBiometricBusy(false);
     }
   }
 
@@ -269,6 +296,20 @@ export default function LoginPage() {
                 <Button type="submit" disabled={busy} style={{ width: "100%" }}>
                   {busy ? "Signing in…" : "Sign in"}
                 </Button>
+                {biometricAvailable && biometricEnrolled && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={onBiometric}
+                    disabled={busy || biometricBusy}
+                    style={{ width: "100%" }}
+                  >
+                    <Icon name="shield" size={16} />
+                    {biometricBusy
+                      ? "Waiting for biometrics…"
+                      : `Use fingerprint or face${savedBiometricUsername ? ` (@${savedBiometricUsername})` : ""}`}
+                  </Button>
+                )}
               </form>
 
               <p className="login-footnote">

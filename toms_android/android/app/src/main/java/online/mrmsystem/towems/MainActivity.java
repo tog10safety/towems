@@ -3,6 +3,7 @@ package online.mrmsystem.towems;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -50,10 +51,21 @@ public class MainActivity extends BridgeActivity {
     private WatcherBar watcherBar;
     /** Capacitor installs its page view a moment after onCreate on some builds. */
     private int attachAttempts;
+    /** Native Keystore-backed biometric bridge exposed to the TOWEMS page. */
+    private BiometricBridge biometricBridge;
+    private int biometricAttachAttempts;
+    /**
+     * True while TOWEMS has deliberately handed the screen to another activity:
+     * the document picker, the camera, a permission dialog or a settings page.
+     * These leaves are temporary, so the decrypted token must stay in memory;
+     * a Home/recents leave is not marked and still locks normally.
+     */
+    private boolean temporaryActivityInProgress;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        attachBiometricBridge();
         attachWatcherBar();
         boolean askingForNotifications = askForNotifications();
         startWatcher();
@@ -72,6 +84,9 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        // The permission dialog has closed; the next Home/recents leave is a
+        // real background again and must lock.
+        temporaryActivityInProgress = false;
         // Capacitor tracks its own permission callbacks through this method.
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
@@ -93,9 +108,13 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        // Returning from a picker, camera, permission dialog or settings page is
+        // not a new visit to the app. A later Home/recents stop is.
+        temporaryActivityInProgress = false;
         // The in-app bell already polls while a screen is open; the service must
         // stay quiet then, or every alert arrives twice.
         AlertService.appVisible = true;
+        attachBiometricBridge();
         attachWatcherBar();
         startWatcher();
         TrackingService.startIfPermitted(this);
@@ -110,6 +129,88 @@ public class MainActivity extends BridgeActivity {
         super.onPause();
     }
 
+    @Override
+    public void onStop() {
+        // Leaving the foreground must not sign the account out: the alert
+        // watcher keeps its own credential, and the Keystore refresh token is
+        // left on disk. Only the decrypted copy is dropped, so the next open
+        // requires the fingerprint or face.
+        //
+        // A document picker, camera, permission dialog or settings page puts
+        // this activity into the background too. Those are temporary detours
+        // opened by TOWEMS itself; locking there made choosing a profile photo
+        // ask for a fingerprint before the person had even returned to the page
+        // they started from. The flag is set before the external activity is
+        // launched and cleared when the result/resume comes back, so a genuine
+        // Home, recents or screen-off stop still locks.
+        if (temporaryActivityInProgress && !isFinishing()) {
+            Log.i("TOWEMS/Lifecycle", "temporary activity; keeping the session unlocked");
+        } else if (biometricBridge != null) {
+            biometricBridge.lockForBackground();
+        }
+        super.onStop();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        // This also runs before onResume on some Android versions. Clearing it
+        // here ensures a later real background cannot inherit the exemption.
+        temporaryActivityInProgress = false;
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    /**
+     * ActivityResultLauncher, the file chooser and the camera all end up here.
+     * Mark only targets outside TOWEMS: an internal activity is not a reason to
+     * keep the app unlocked.
+     */
+    private void noteTemporaryActivity(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        ComponentName target = intent.getComponent();
+        if (target != null && getPackageName().equals(target.getPackageName())) {
+            return;
+        }
+        temporaryActivityInProgress = true;
+    }
+
+    /**
+     * Request permissions that put a system dialog over TOWEMS. Mark the leave
+     * first: on some Android versions the permission controller stops the
+     * activity, which would otherwise lock the app while the dialog is still up.
+     */
+    private void requestTemporaryPermissions(String[] permissions, int requestCode) {
+        temporaryActivityInProgress = true;
+        ActivityCompat.requestPermissions(this, permissions, requestCode);
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void startActivityForResult(Intent intent, int requestCode) {
+        noteTemporaryActivity(intent);
+        super.startActivityForResult(intent, requestCode);
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void startActivityForResult(Intent intent, int requestCode, Bundle options) {
+        noteTemporaryActivity(intent);
+        super.startActivityForResult(intent, requestCode, options);
+    }
+
+    @Override
+    public void startActivity(Intent intent) {
+        noteTemporaryActivity(intent);
+        super.startActivity(intent);
+    }
+
+    @Override
+    public void startActivity(Intent intent, Bundle options) {
+        noteTemporaryActivity(intent);
+        super.startActivity(intent, options);
+    }
+
     /**
      * Start the watcher, or ask the running one to poll now.
      *
@@ -121,6 +222,25 @@ public class MainActivity extends BridgeActivity {
         Intent service = new Intent(this, AlertService.class)
                 .setAction(AlertService.ACTION_CHECK_NOW);
         ContextCompat.startForegroundService(this, service);
+    }
+
+    /**
+     * Expose the native biometric bridge once Capacitor has created its WebView.
+     * Only the exact TOWEMS origin is accepted by every bridge method.
+     */
+    private void attachBiometricBridge() {
+        if (biometricBridge != null) {
+            return;
+        }
+        if (getBridge() == null || getBridge().getWebView() == null) {
+            if (biometricAttachAttempts++ < 30) {
+                getWindow().getDecorView().postDelayed(this::attachBiometricBridge, 100);
+            }
+            return;
+        }
+        biometricBridge = new BiometricBridge(this);
+        getBridge().getWebView().addJavascriptInterface(biometricBridge, "TOWEMSBiometric");
+        Log.i("TOWEMS/Biometric", "bridge attached to TOWEMS WebView");
     }
 
     /**
@@ -170,8 +290,7 @@ public class MainActivity extends BridgeActivity {
                 == PackageManager.PERMISSION_GRANTED) {
             return false;
         }
-        ActivityCompat.requestPermissions(
-                this,
+        requestTemporaryPermissions(
                 new String[] { Manifest.permission.POST_NOTIFICATIONS },
                 NOTIFICATION_PERMISSION_REQUEST);
         return true;
@@ -258,8 +377,7 @@ public class MainActivity extends BridgeActivity {
                     // this from a dialog, only from the settings page, and a person
                     // who backs out of there has not decided anything yet.
                     if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-                        ActivityCompat.requestPermissions(
-                                this,
+                        requestTemporaryPermissions(
                                 new String[] { Manifest.permission.ACCESS_BACKGROUND_LOCATION },
                                 BACKGROUND_LOCATION_REQUEST);
                     } else {

@@ -40,7 +40,7 @@ def linked_payload(unit, assets, lead, start, end, **overrides):
     return payload
 
 
-def preposition_payload(unit, wing, start="2026-11-20T06:00:00", end="2026-11-20T08:00:00"):
+def preposition_payload(unit, wing, start="2027-11-20T06:00:00", end="2027-11-20T08:00:00"):
     payload = air_payload(unit, title="Preposition to HTOG 10")
     payload["air_detail"].update(
         {
@@ -60,7 +60,7 @@ def preposition_payload(unit, wing, start="2026-11-20T06:00:00", end="2026-11-20
 def manual_element_payload(unit, first, second):
     payload = air_payload(unit, title="Manual Element")
     payload["air_detail"] = {
-        "operation_date": "2026-11-20",
+        "operation_date": "2027-11-20",
         "mission_configuration": "element",
         "aircraft_count": 2,
         "elements": [
@@ -74,8 +74,8 @@ def manual_element_payload(unit, first, second):
                         "is_lead": True,
                         "itineraries": [
                             {
-                                "etd": "2026-11-20T08:00:00",
-                                "eta": "2026-11-20T10:00:00",
+                                "etd": "2027-11-20T08:00:00",
+                                "eta": "2027-11-20T10:00:00",
                                 "origin": ASSEMBLY_TEXT,
                                 "destination": "Surigao Area",
                             }
@@ -88,8 +88,8 @@ def manual_element_payload(unit, first, second):
                         "is_lead": False,
                         "itineraries": [
                             {
-                                "etd": "2026-11-20T08:00:00",
-                                "eta": "2026-11-20T10:00:00",
+                                "etd": "2027-11-20T08:00:00",
+                                "eta": "2027-11-20T10:00:00",
                                 "origin": ASSEMBLY_TEXT,
                                 "destination": "Surigao Area",
                             }
@@ -105,7 +105,7 @@ def manual_element_payload(unit, first, second):
 def manual_single_payload(unit, aircraft, start, end):
     payload = air_payload(unit, title="Manual preposition")
     payload["air_detail"] = {
-        "operation_date": "2026-11-20",
+        "operation_date": "2027-11-20",
         "mission_configuration": "single",
         "aircraft_count": 1,
         "elements": [
@@ -136,7 +136,7 @@ def test_colocated_aircraft_form_an_element_without_a_preposition(as_user, plann
     lead = asset_at(unit, "101", ASSEMBLY_TEXT)
     wing = asset_at(unit, "102", ASSEMBLY_TEXT)
     payload = linked_payload(
-        unit, [lead, wing], lead, "2026-11-20T08:00:00", "2026-11-20T12:00:00"
+        unit, [lead, wing], lead, "2027-11-20T08:00:00", "2027-11-20T12:00:00"
     )
 
     response = as_user(planner).post("/api/missions/", payload, format="json")
@@ -150,7 +150,7 @@ def test_separated_aircraft_are_refused_without_a_preposition(as_user, planner, 
     lead = asset_at(unit, "111", ASSEMBLY_TEXT)
     wing = asset_at(unit, "112", FAR_TEXT)
     payload = linked_payload(
-        unit, [lead, wing], lead, "2026-11-20T08:00:00", "2026-11-20T12:00:00"
+        unit, [lead, wing], lead, "2027-11-20T08:00:00", "2027-11-20T12:00:00"
     )
 
     response = as_user(planner).post("/api/missions/", payload, format="json")
@@ -166,7 +166,7 @@ def test_element_refuses_aircraft_without_a_recorded_location(as_user, planner, 
     lead = asset_at(unit, "115", ASSEMBLY_TEXT)
     wing = make_air_asset(unit, "116", current_location="")
     payload = linked_payload(
-        unit, [lead, wing], lead, "2026-11-20T08:00:00", "2026-11-20T12:00:00"
+        unit, [lead, wing], lead, "2027-11-20T08:00:00", "2027-11-20T12:00:00"
     )
 
     response = as_user(planner).post("/api/missions/", payload, format="json")
@@ -189,7 +189,7 @@ def test_separated_element_holds_until_the_preposition_is_completed(
     assert first.status_code == 201, first.content
 
     formation = linked_payload(
-        unit, [lead, wing], lead, "2026-11-20T08:00:00", "2026-11-20T12:00:00"
+        unit, [lead, wing], lead, "2027-11-20T08:00:00", "2027-11-20T12:00:00"
     )
     formation.update(
         {
@@ -213,7 +213,7 @@ def test_separated_element_holds_until_the_preposition_is_completed(
     preposition.save(update_fields=["status"])
     arrival = client.post(
         f"/api/missions/{preposition.id}/air-arrival/",
-        {"at": "2026-11-20T08:00:00", "ready": True},
+        {"at": "2027-11-20T08:00:00", "ready": True},
         format="json",
     )
     assert arrival.status_code == 200, arrival.content
@@ -226,7 +226,7 @@ def test_separated_element_holds_until_the_preposition_is_completed(
     ]
 
     preposition.status = "completed"
-    preposition.completed_at = datetime(2026, 11, 20, 8, 0)
+    preposition.completed_at = datetime(2027, 11, 20, 8, 0)
     preposition.save(update_fields=["status", "completed_at"])
     mission.refresh_from_db()
     assert approvals.dependency_blockers(mission) == []
@@ -243,7 +243,7 @@ def test_daily_board_landing_completes_the_preposition_and_releases_the_joint_mi
     first = client.post(
         "/api/missions/",
         manual_single_payload(
-            unit, wing, "2026-11-20T06:00:00", "2026-11-20T08:00:00"
+            unit, wing, "2027-11-20T06:00:00", "2027-11-20T08:00:00"
         ),
         format="json",
     )
@@ -255,20 +255,20 @@ def test_daily_board_landing_completes_the_preposition_and_releases_the_joint_mi
 
     takeoff = client.post(
         f"/api/missions/{preposition.id}/itineraries/{leg.id}/actual/",
-        {"event": "takeoff", "at": "2026-11-20T06:05:00"},
+        {"event": "takeoff", "at": "2027-11-20T06:05:00"},
         format="json",
     )
     assert takeoff.status_code == 200, takeoff.content
     landing = client.post(
         f"/api/missions/{preposition.id}/itineraries/{leg.id}/actual/",
-        {"event": "landing", "at": "2026-11-20T08:00:00"},
+        {"event": "landing", "at": "2027-11-20T08:00:00"},
         format="json",
     )
     assert landing.status_code == 200, landing.content
 
     preposition.refresh_from_db()
     assert preposition.status == "completed"
-    assert preposition.completed_at == datetime(2026, 11, 20, 8, 0)
+    assert preposition.completed_at == datetime(2027, 11, 20, 8, 0)
     wing.refresh_from_db()
     assert wing.current_location == ASSEMBLY_TEXT
 
@@ -315,7 +315,7 @@ def test_manual_preposition_arrival_moves_the_asset_and_releases_the_joint_missi
     first = client.post(
         "/api/missions/",
         manual_single_payload(
-            unit, wing, "2026-11-20T06:00:00", "2026-11-20T08:00:00"
+            unit, wing, "2027-11-20T06:00:00", "2027-11-20T08:00:00"
         ),
         format="json",
     )
@@ -338,7 +338,7 @@ def test_manual_preposition_arrival_moves_the_asset_and_releases_the_joint_missi
     ).values_list("id", flat=True).first()
     blocked = client.post(
         f"/api/missions/{mission.id}/itineraries/{leg_id}/actual/",
-        {"event": "takeoff", "at": "2026-11-20T08:00:00"},
+        {"event": "takeoff", "at": "2027-11-20T08:00:00"},
         format="json",
     )
     assert blocked.status_code == 400, blocked.content
@@ -349,7 +349,7 @@ def test_manual_preposition_arrival_moves_the_asset_and_releases_the_joint_missi
     preposition.save(update_fields=["status"])
     arrival = client.post(
         f"/api/missions/{preposition.id}/air-arrival/",
-        {"at": "2026-11-20T08:00:00", "ready": True},
+        {"at": "2027-11-20T08:00:00", "ready": True},
         format="json",
     )
     assert arrival.status_code == 200, arrival.content
@@ -361,20 +361,20 @@ def test_manual_preposition_arrival_moves_the_asset_and_releases_the_joint_missi
     ]
     still_blocked = client.post(
         f"/api/missions/{mission.id}/itineraries/{leg_id}/actual/",
-        {"event": "takeoff", "at": "2026-11-20T08:00:00"},
+        {"event": "takeoff", "at": "2027-11-20T08:00:00"},
         format="json",
     )
     assert still_blocked.status_code == 400, still_blocked.content
 
     preposition.status = "completed"
-    preposition.completed_at = datetime(2026, 11, 20, 8, 0)
+    preposition.completed_at = datetime(2027, 11, 20, 8, 0)
     preposition.save(update_fields=["status", "completed_at"])
     mission.refresh_from_db()
     assert approvals.dependency_blockers(mission) == []
     assert approvals.formation_blockers(mission) == []
     released = client.post(
         f"/api/missions/{mission.id}/itineraries/{leg_id}/actual/",
-        {"event": "takeoff", "at": "2026-11-20T08:00:00"},
+        {"event": "takeoff", "at": "2027-11-20T08:00:00"},
         format="json",
     )
     assert released.status_code == 200, released.content
@@ -393,7 +393,7 @@ def test_joint_etd_must_exactly_match_the_incoming_aircraft_eta(
     assert first.status_code == 201, first.content
 
     formation = linked_payload(
-        unit, [lead, wing], lead, "2026-11-20T09:00:00", "2026-11-20T12:00:00"
+        unit, [lead, wing], lead, "2027-11-20T09:00:00", "2027-11-20T12:00:00"
     )
     formation.update(
         {
@@ -420,7 +420,7 @@ def test_delayed_preposition_keeps_the_joint_mission_on_hold(as_user, planner, u
     assert first.status_code == 201, first.content
 
     formation = linked_payload(
-        unit, [lead, wing], lead, "2026-11-20T08:00:00", "2026-11-20T12:00:00"
+        unit, [lead, wing], lead, "2027-11-20T08:00:00", "2027-11-20T12:00:00"
     )
     formation.update(
         {
@@ -437,7 +437,7 @@ def test_delayed_preposition_keeps_the_joint_mission_on_hold(as_user, planner, u
     preposition.save(update_fields=["status"])
     arrival = client.post(
         f"/api/missions/{preposition.id}/air-arrival/",
-        {"at": "2026-11-20T09:00:00", "ready": True},
+        {"at": "2027-11-20T09:00:00", "ready": True},
         format="json",
     )
     assert arrival.status_code == 200, arrival.content
@@ -447,7 +447,7 @@ def test_delayed_preposition_keeps_the_joint_mission_on_hold(as_user, planner, u
         "dependency_waiting"
     ]
     preposition.status = "completed"
-    preposition.completed_at = datetime(2026, 11, 20, 9, 0)
+    preposition.completed_at = datetime(2027, 11, 20, 9, 0)
     preposition.save(update_fields=["status", "completed_at"])
     mission.refresh_from_db()
     assert [row["code"] for row in approvals.dependency_blockers(mission)] == [
@@ -505,7 +505,7 @@ def test_manual_element_aircraft_cannot_be_double_booked_either(
     first = client.post(
         "/api/missions/",
         manual_single_payload(
-            unit, lead, "2026-11-20T06:00:00", "2026-11-20T10:00:00"
+            unit, lead, "2027-11-20T06:00:00", "2027-11-20T10:00:00"
         ),
         format="json",
     )
@@ -514,7 +514,7 @@ def test_manual_element_aircraft_cannot_be_double_booked_either(
     second = client.post(
         "/api/missions/",
         manual_single_payload(
-            unit, lead, "2026-11-20T09:00:00", "2026-11-20T11:00:00"
+            unit, lead, "2027-11-20T09:00:00", "2027-11-20T11:00:00"
         ),
         format="json",
     )
@@ -529,8 +529,8 @@ def test_manual_element_aircraft_cannot_be_double_booked_either(
         "/api/inventory/air-assets/conflicts/",
         {
             "air_asset_ids": str(lead.id),
-            "start": "2026-11-20T09:00:00",
-            "end": "2026-11-20T11:00:00",
+            "start": "2027-11-20T09:00:00",
+            "end": "2027-11-20T11:00:00",
         },
     )
     assert conflicts.status_code == 200, conflicts.content
@@ -553,8 +553,8 @@ def test_an_aircraft_cannot_be_double_booked_into_an_overlapping_sortie(
             "aircraft_count": 1,
             "air_asset_ids": [lead.id],
             "air_asset": lead.id,
-            "scheduled_departure": "2026-11-20T06:00:00",
-            "scheduled_arrival": "2026-11-20T10:00:00",
+            "scheduled_departure": "2027-11-20T06:00:00",
+            "scheduled_arrival": "2027-11-20T10:00:00",
         }
     )
     created = client.post("/api/missions/", first, format="json")
@@ -567,8 +567,8 @@ def test_an_aircraft_cannot_be_double_booked_into_an_overlapping_sortie(
             "aircraft_count": 1,
             "air_asset_ids": [lead.id],
             "air_asset": lead.id,
-            "scheduled_departure": "2026-11-20T09:00:00",
-            "scheduled_arrival": "2026-11-20T11:00:00",
+            "scheduled_departure": "2027-11-20T09:00:00",
+            "scheduled_arrival": "2027-11-20T11:00:00",
         }
     )
     response = client.post("/api/missions/", second, format="json")

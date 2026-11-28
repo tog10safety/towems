@@ -8,6 +8,9 @@ router = DefaultRouter()
 router.register("personnel", views.PersonnelViewSet, basename="personnel")
 router.register("admin/users", views.UserAdminViewSet, basename="admin-users")
 router.register(
+    "admin/mobile-devices", views.MobileDeviceViewSet, basename="admin-mobile-devices"
+)
+router.register(
     "unit-changes", views.UnitChangeRequestViewSet, basename="unit-change"
 )
 
@@ -63,6 +66,18 @@ urlpatterns = [
         "auth/devices/tracking/",
         views.DeviceTrackingView.as_view(),
         name="auth-device-tracking",
+    ),
+    # Android biometric session: enrol from a live MFA session, then rotate the
+    # Keystore-held refresh token for a new 15-minute access token.
+    path(
+        "auth/mobile/enroll/",
+        views.MobileEnrollView.as_view(),
+        name="auth-mobile-enroll",
+    ),
+    path(
+        "auth/mobile/refresh/",
+        views.MobileRefreshView.as_view(),
+        name="auth-mobile-refresh",
     ),
     path("auth/logout/", views.LogoutView.as_view(), name="auth-logout"),
     path("auth/me/", views.MeView.as_view(), name="auth-me"),

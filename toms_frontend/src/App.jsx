@@ -49,6 +49,9 @@ const UnitsPage = lazy(() => import("./pages/UnitsPage.jsx"));
 const UserManagementPage = lazy(() =>
   import("./pages/UserManagementPage.jsx")
 );
+const MobileDevicesPage = lazy(() =>
+  import("./pages/MobileDevicesPage.jsx")
+);
 const VehiclesPage = lazy(() => import("./pages/VehiclesPage.jsx"));
 
 export default function App() {
@@ -170,6 +173,7 @@ export default function App() {
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="admin/users" element={<UserManagementPage />} />
+        <Route path="admin/mobile-devices" element={<MobileDevicesPage />} />
         <Route
           path="admin/unit-changes"
           element={<UnitChangeRequestsPage />}
